@@ -169,6 +169,23 @@ bean-retire ledger.beancount \
 
 `--scenario` accepts the same keys as the explicit flags and takes precedence over them.
 
+### Year-by-year detail
+
+```bash
+bean-retire ledger.beancount --detail
+bean-retire ledger.beancount --owner person1 --detail
+```
+
+Prints a table showing each year of the drawdown phase with columns: calendar year, age, portfolio start, income (SS + pension), contributions from still-working owners, net withdrawal, investment return, portfolio end, and any life events that year (Social Security started, pension started, spouse retired).
+
+In `--json` mode the detail array is always included — no extra flag needed:
+
+```bash
+bean-retire ledger.beancount --json | jq '.household.detail[0]'
+```
+
+Each row has fields: `calendar_year`, `age`, `portfolio_start`, `income_ss`, `income_pension`, `contributions`, `withdrawal`, `investment_return`, `portfolio_end`, `life_events`.
+
 ### Monte Carlo
 
 ```bash
