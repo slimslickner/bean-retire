@@ -129,7 +129,7 @@ Assets:Investment:Retirement:CapTech-Capital-Group-401k:VTMGX
 
 ### 3. Expense accounts (no setup needed)
 
-bean-retire derives the spending baseline automatically from your `Expenses:*` postings over the trailing 3 years. No additional configuration is required.
+bean-retire derives the spending baseline automatically from your `Expenses:*` postings over the trailing 3 years (configurable via `--spending-years`). No additional configuration is required.
 
 ## Usage
 
@@ -156,6 +156,9 @@ bean-retire ledger.beancount \
   --spending-ratio 0.75 \
   --return-rate 0.06 \
   --inflation-rate 0.025 \
+  --life-expectancy 95 \
+  --return-stddev 0.15 \
+  --spending-years 1 \
   --retirement-age-override 55
 ```
 
@@ -167,7 +170,7 @@ bean-retire ledger.beancount \
   --scenario spending-ratio=0.70
 ```
 
-`--scenario` accepts the same keys as the explicit flags and takes precedence over them.
+`--scenario` accepts the same keys as the explicit flags (`spending-ratio`, `return-rate`, `inflation-rate`, `retirement-age`, `life-expectancy`, `return-stddev`, `spending-years`) and takes precedence over them.
 
 ### Year-by-year detail
 
@@ -189,10 +192,10 @@ Each row has fields: `calendar_year`, `age`, `portfolio_start`, `income_ss`, `in
 ### Monte Carlo
 
 ```bash
-bean-retire ledger.beancount --monte-carlo --simulation-count 2000
+bean-retire ledger.beancount --monte-carlo --simulation-count 2000 --return-stddev 0.15
 ```
 
-Runs N simulations with normally-distributed annual returns (mean = `--return-rate`, stddev = 12%) and reports probability of portfolio survival to age 100, plus 10th/90th percentile depletion ages.
+Runs N simulations with normally-distributed annual returns (mean = `--return-rate`, stddev = `--return-stddev`, default 12%) and reports probability of portfolio survival to `--life-expectancy`, plus 10th/90th percentile depletion ages.
 
 ### Historical ledger
 
@@ -321,13 +324,13 @@ Running `bean-retire` without `--owner` projects the entire household together:
 - **Spending is counted once** — the household spending baseline is not duplicated per owner.
 - **Accumulation phase** (today → first retirement date): each owner's portfolio grows independently at `annual_return_rate`, with annual contributions (derived from the trailing 2-year average of inflows to tagged accounts) added at year-end. All portfolios are merged into a single combined pool at the first owner's retirement date.
 - **Overlap period**: if some owners retire before others, the still-working owners' contributions continue flowing into the combined pool, reducing drawdown pressure.
-- **Joint drawdown phase** (first retirement → youngest owner's age 100): each year, inflation-adjusted household spending minus stacked Social Security income is withdrawn from the combined pool. Social Security income from each owner is added once that owner reaches their `social-security-age`.
+- **Joint drawdown phase** (first retirement → youngest owner's `--life-expectancy`, default 100): each year, inflation-adjusted household spending minus stacked Social Security income is withdrawn from the combined pool. Social Security income from each owner is added once that owner reaches their `social-security-age`.
 
 ### Per-owner mode (`--owner NAME`)
 
 Passing `--owner` projects a single owner independently against the full household spending baseline — equivalent to the previous default behavior. Useful for understanding each person's individual retirement trajectory.
 
-**Spending baseline**: trailing 3-year average of `Expenses:*` postings, with each year's total inflated to today's dollars using `inflation_rate`. Multiplied by `spending_ratio` (default 0.80) to get the retirement income target.
+**Spending baseline**: trailing N-year average of `Expenses:*` postings (default 3, configurable via `--spending-years`), with each year's total inflated to today's dollars using `inflation_rate`. Multiplied by `spending_ratio` (default 0.80) to get the retirement income target.
 
 ## Development
 

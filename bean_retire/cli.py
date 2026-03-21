@@ -73,12 +73,12 @@ def detail_rows_to_list(rows: list[DetailRow]) -> list[dict]:
     ]
 
 
-def render_result(result: ProjectionResult) -> Panel:
+def render_result(result: ProjectionResult, life_expectancy: int = 100) -> Panel:
     lines = []
 
     sustainable = result.years_to_depletion is None
     if sustainable:
-        outcome_icon = "[green]✓ Sustainable to age 100[/green]"
+        outcome_icon = f"[green]✓ Sustainable to age {life_expectancy}[/green]"
     else:
         outcome_icon = f"[red]✗ Depleted at age {result.depletion_age}[/red]"
 
@@ -108,7 +108,7 @@ def render_result(result: ProjectionResult) -> Panel:
         mc = result.monte_carlo_result
         lines.append("")
         lines.append(f"[bold]Monte Carlo ({result.simulation_count:,} simulations):[/bold]")
-        lines.append(f"  Probability sustainable to 100:  {fmt_pct(mc.probability_sustainable)}")
+        lines.append(f"  Probability sustainable to {life_expectancy}:  {fmt_pct(mc.probability_sustainable)}")
         if mc.median_depletion_age is not None:
             lines.append(f"  Median depletion age:           {mc.median_depletion_age}")
         if mc.p10_depletion_age is not None:
@@ -255,6 +255,12 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
               help="Annual inflation rate.")
 @click.option("--retirement-age-override", default=None, type=int,
               help="Override retirement age for all owners.")
+@click.option("--life-expectancy", default=100, type=int, show_default=True,
+              help="Age to project through (simulation horizon).")
+@click.option("--return-stddev", default=0.12, type=float, show_default=True,
+              help="Annual return standard deviation for Monte Carlo simulation.")
+@click.option("--spending-years", default=3, type=int, show_default=True,
+              help="Number of trailing years to average for the spending baseline.")
 @click.option("--monte-carlo", is_flag=True, default=False, help="Run Monte Carlo simulation.")
 @click.option("--simulation-count", default=1000, type=int, show_default=True,
               help="Number of Monte Carlo simulations.")
@@ -272,6 +278,9 @@ def main(
     spending_ratio,
     return_rate,
     inflation_rate,
+    life_expectancy,
+    return_stddev,
+    spending_years,
     retirement_age_override,
     monte_carlo,
     simulation_count,
@@ -295,16 +304,24 @@ def main(
         inflation_rate = float(scenarios["inflation-rate"])
     if "retirement-age" in scenarios:
         retirement_age_override = int(scenarios["retirement-age"])
+    if "life-expectancy" in scenarios:
+        life_expectancy = int(scenarios["life-expectancy"])
+    if "return-stddev" in scenarios:
+        return_stddev = float(scenarios["return-stddev"])
+    if "spending-years" in scenarios:
+        spending_years = int(scenarios["spending-years"])
 
     config = ProjectionConfig(
         spending_ratio=Decimal(str(spending_ratio)),
         annual_return_rate=Decimal(str(return_rate)),
         inflation_rate=Decimal(str(inflation_rate)),
         simulation_count=simulation_count,
+        return_stddev=return_stddev,
+        life_expectancy=life_expectancy,
     )
 
     reference_date = date.fromisoformat(as_of_date) if as_of_date else None
-    data = parse_ledger(ledger_file, today=reference_date)
+    data = parse_ledger(ledger_file, spending_years=spending_years, today=reference_date)
     owners = data["owners"]
     accounts = data["accounts"]
     contributions = data["contributions"]
@@ -328,6 +345,9 @@ def main(
         "spending_ratio": spending_ratio,
         "annual_return_rate": return_rate,
         "inflation_rate": inflation_rate,
+        "life_expectancy": life_expectancy,
+        "return_stddev": return_stddev,
+        "spending_years": spending_years,
     }
     spending_dict: dict[str, object] = {
         "annual_amount": float(spending.annual_amount),
@@ -358,7 +378,7 @@ def main(
             }, indent=2))
         else:
             console.print()
-            console.print(render_result(per_owner_result))
+            console.print(render_result(per_owner_result, life_expectancy=config.life_expectancy))
             if show_detail:
                 if per_owner_result.accumulation_rows:
                     console.print()
@@ -369,7 +389,7 @@ def main(
                 console.print()
                 console.print(render_detail_table(
                     per_owner_result.detail_rows,
-                    title=f"{owner.title()} — Drawdown (retirement → age 100)",
+                    title=f"{owner.title()} — Drawdown (retirement → age {config.life_expectancy})",
                 ))
             console.print()
     else:
@@ -410,6 +430,6 @@ def main(
                 console.print()
                 console.print(render_detail_table(
                     household.detail_rows,
-                    title="Household — Drawdown (first retirement → youngest age 100)",
+                    title=f"Household — Drawdown (first retirement → youngest age {config.life_expectancy})",
                 ))
             console.print()

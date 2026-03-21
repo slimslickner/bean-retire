@@ -74,6 +74,7 @@ class ProjectionConfig:
     inflation_rate: Decimal = Decimal("0.03")
     simulation_count: int = 1000
     return_stddev: float = 0.12
+    life_expectancy: int = 100
 
 
 @dataclass

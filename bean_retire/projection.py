@@ -365,7 +365,7 @@ def project_owner(
         years_between(retirement_date, pension_date) if pension_date is not None else 0
     )
 
-    max_years_in_retirement = max(0, 100 - owner.retirement_age)
+    max_years_in_retirement = max(0, config.life_expectancy - owner.retirement_age)
 
     # Initial withdrawal need (first year of retirement, accounting for any income already active)
     ss_active_year1 = annual_ss_income if years_retirement_to_ss == 0 else Decimal("0")
@@ -612,7 +612,7 @@ def project_household(
     }
 
     youngest_age_at_first = years_between(youngest.birth_date, first_retirement_date)
-    max_years = max(0, 100 - youngest_age_at_first)
+    max_years = max(0, config.life_expectancy - youngest_age_at_first)
 
     years_until_pension = {
         o.name: (
