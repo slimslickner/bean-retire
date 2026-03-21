@@ -1,0 +1,166 @@
+option "title" "Bean-Retire Sample Ledger"
+option "operating_currency" "USD"
+
+; ─── Owner directives ─────────────────────────────────────────────────────────
+
+2020-01-01 custom "owner" "person1"
+  birth-date: "1985-03-15"
+  retirement-age: "57"
+  social-security-age: "67"
+  social-security-estimate: "2400"
+
+2020-01-01 custom "owner" "person2"
+  birth-date: "1987-06-20"
+  retirement-age: "55"
+  social-security-age: "67"
+  social-security-estimate: "1800"
+
+; ─── Accounts ─────────────────────────────────────────────────────────────────
+
+2020-01-01 open Equity:Stub
+
+2020-01-01 open Assets:Investment:Retirement:Person1s-401k USD
+  owner: "person1"
+  tax-account-type: "split"
+  traditional-percent: "65"
+  roth-percent: "35"
+
+2020-01-01 open Assets:Investment:Retirement:Person1s-Roth-IRA USD
+  owner: "person1"
+  tax-account-type: "roth"
+
+2020-01-01 open Assets:Investment:Retirement:Person2s-403b USD
+  owner: "person2"
+  tax-account-type: "traditional"
+
+2020-01-01 open Expenses:Housing USD
+2020-01-01 open Expenses:Food USD
+2020-01-01 open Expenses:Transport USD
+
+; ─── Opening retirement balances ──────────────────────────────────────────────
+; Person1: $200k (150k 401k + 50k Roth), Person2: $80k (403b)
+
+2020-01-01 * "Opening retirement balances"
+  Assets:Investment:Retirement:Person1s-401k       150000.00 USD
+  Assets:Investment:Retirement:Person1s-Roth-IRA    50000.00 USD
+  Assets:Investment:Retirement:Person2s-403b       80000.00 USD
+  Equity:Stub                                 -280000.00 USD
+
+; ─── Annual retirement contributions ──────────────────────────────────────────
+; Person1: $18k/yr 401k + $7k/yr Roth = $25k/yr
+; Person2: $10k/yr 403b
+; Contributions dated mid-year so the 2-year trailing window (cutoff 2024-03-20)
+; captures both 2024 and 2025 contributions.
+
+2022-06-15 * "2022 Person1 retirement contributions"
+  Assets:Investment:Retirement:Person1s-401k        18000.00 USD
+  Assets:Investment:Retirement:Person1s-Roth-IRA     7000.00 USD
+  Equity:Stub                                  -25000.00 USD
+
+2022-06-15 * "2022 Person2 retirement contribution"
+  Assets:Investment:Retirement:Person2s-403b       10000.00 USD
+  Equity:Stub                                  -10000.00 USD
+
+2023-06-15 * "2023 Person1 retirement contributions"
+  Assets:Investment:Retirement:Person1s-401k        18000.00 USD
+  Assets:Investment:Retirement:Person1s-Roth-IRA     7000.00 USD
+  Equity:Stub                                  -25000.00 USD
+
+2023-06-15 * "2023 Person2 retirement contribution"
+  Assets:Investment:Retirement:Person2s-403b       10000.00 USD
+  Equity:Stub                                  -10000.00 USD
+
+2024-06-15 * "2024 Person1 retirement contributions"
+  Assets:Investment:Retirement:Person1s-401k        18000.00 USD
+  Assets:Investment:Retirement:Person1s-Roth-IRA     7000.00 USD
+  Equity:Stub                                  -25000.00 USD
+
+2024-06-15 * "2024 Person2 retirement contribution"
+  Assets:Investment:Retirement:Person2s-403b       10000.00 USD
+  Equity:Stub                                  -10000.00 USD
+
+2025-06-15 * "2025 Person1 retirement contributions"
+  Assets:Investment:Retirement:Person1s-401k        18000.00 USD
+  Assets:Investment:Retirement:Person1s-Roth-IRA     7000.00 USD
+  Equity:Stub                                  -25000.00 USD
+
+2025-06-15 * "2025 Person2 retirement contribution"
+  Assets:Investment:Retirement:Person2s-403b       10000.00 USD
+  Equity:Stub                                  -10000.00 USD
+
+; ─── Annual expenses ──────────────────────────────────────────────────────────
+; $42,000/year: Housing $24k + Food $12k + Transport $6k
+; Posted quarterly. Trailing 3-year window from 2026-03-20 has cutoff 2023-03-20,
+; so all four 2023 quarters (earliest: 2023-03-31) are included.
+
+2023-03-31 * "Q1 2023 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2023-06-30 * "Q2 2023 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2023-09-30 * "Q3 2023 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2023-12-31 * "Q4 2023 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2024-03-31 * "Q1 2024 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2024-06-30 * "Q2 2024 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2024-09-30 * "Q3 2024 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2024-12-31 * "Q4 2024 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2025-03-31 * "Q1 2025 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2025-06-30 * "Q2 2025 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2025-09-30 * "Q3 2025 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD
+
+2025-12-31 * "Q4 2025 expenses"
+  Expenses:Housing           6000.00 USD
+  Expenses:Food              3000.00 USD
+  Expenses:Transport         1500.00 USD
+  Equity:Stub               -10500.00 USD

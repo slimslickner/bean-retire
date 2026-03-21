@@ -1,0 +1,35 @@
+[project]
+name = "bean-retire"
+version = "0.1.0"
+description = "Retirement projection tool for Beancount ledgers"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beancount>=2.3",
+    "click>=8.0",
+    "pytest>=9.0.2",
+    "rich>=13.0",
+]
+
+[project.scripts]
+bean-retire = "bean_retire.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7",
+    "ty>=0.0.24",
+]
