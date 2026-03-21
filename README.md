@@ -24,7 +24,7 @@ bean-retire reads directly from your Beancount ledger. Two things must be config
 
 ### 1. Owner directives
 
-Add one `custom "owner"` directive per person. All five metadata fields are required.
+Add one `custom "owner"` directive per person. The first four metadata fields are required; pension fields are optional.
 
 ```beancount
 2020-01-01 custom "owner" "person1"
@@ -32,6 +32,8 @@ Add one `custom "owner"` directive per person. All five metadata fields are requ
   retirement-age: "57"
   social-security-age: "67"
   social-security-estimate: "2400"
+  pension-age: "57"
+  pension-estimate: "1000"
 
 2020-01-01 custom "owner" "person2"
   birth-date: "1987-06-20"
@@ -40,12 +42,16 @@ Add one `custom "owner"` directive per person. All five metadata fields are requ
   social-security-estimate: "1800"
 ```
 
-| Field | Description |
-|---|---|
-| `birth-date` | ISO date `YYYY-MM-DD` |
-| `retirement-age` | Age (integer) at which this person plans to retire |
-| `social-security-age` | Age to begin Social Security benefits |
-| `social-security-estimate` | Monthly SS benefit in USD (from SSA statement) |
+| Field | Required | Description |
+|---|---|---|
+| `birth-date` | Yes | ISO date `YYYY-MM-DD` |
+| `retirement-age` | Yes | Age (integer) at which this person plans to retire |
+| `social-security-age` | Yes | Age to begin Social Security benefits |
+| `social-security-estimate` | Yes | Monthly SS benefit in USD (from SSA statement) |
+| `pension-age` | No | Age at which pension payments begin |
+| `pension-estimate` | No | Monthly pension income in USD |
+
+Pension income is modelled identically to Social Security: it starts at `pension-age`, is inflation-adjusted each year, and reduces portfolio withdrawals accordingly.
 
 ### 2. Retirement account metadata
 
@@ -218,6 +224,11 @@ Schema version `1.1`. Stable interface for downstream tools and LLM integration.
       "person2": {"annual_amount": 21600.0, "social_security_age": 67}
     },
     "total_annual_ss_income": 50400.0,
+    "pension_income_by_owner": {
+      "person1": {"annual_amount": 12000.0, "pension_age": 57},
+      "person2": {"annual_amount": 0.0, "pension_age": null}
+    },
+    "total_annual_pension_income": 12000.0,
     "years_to_depletion": null,
     "depletion_age": null,
     "sustainable": true,
@@ -246,7 +257,9 @@ Schema version `1.1`. Stable interface for downstream tools and LLM integration.
       "portfolio_at_retirement": 1455934.0,
       "annual_income_need": 35656.62,
       "annual_ss_income": 28800.0,
-      "annual_portfolio_withdrawal_need": 35656.62,
+      "annual_pension_income": 12000.0,
+      "years_retirement_to_pension": 0,
+      "annual_portfolio_withdrawal_need": 23656.62,
       "years_to_depletion": null,
       "depletion_age": null,
       "sustainable": true,

@@ -34,6 +34,8 @@ def parse_owners(entries) -> dict[str, Owner]:
         retirement_age = int(meta["retirement-age"])
         ss_age = int(meta["social-security-age"])
         ss_estimate = Decimal(meta["social-security-estimate"])
+        pension_age = int(meta["pension-age"]) if "pension-age" in meta else None
+        pension_estimate = Decimal(meta["pension-estimate"]) if "pension-estimate" in meta else None
 
         owners[name] = Owner(
             name=name,
@@ -41,6 +43,8 @@ def parse_owners(entries) -> dict[str, Owner]:
             retirement_age=retirement_age,
             social_security_age=ss_age,
             social_security_monthly_estimate=ss_estimate,
+            pension_age=pension_age,
+            pension_monthly_estimate=pension_estimate,
         )
     return owners
 

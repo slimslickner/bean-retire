@@ -8,6 +8,8 @@ option "operating_currency" "USD"
   retirement-age: "57"
   social-security-age: "67"
   social-security-estimate: "2400"
+  pension-age: "57"
+  pension-estimate: "1000"
 
 2020-01-01 custom "owner" "person2"
   birth-date: "1987-06-20"

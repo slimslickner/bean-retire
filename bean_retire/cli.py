@@ -43,6 +43,12 @@ def render_result(result: ProjectionResult) -> Panel:
         f"[bold]Social Security:[/bold]       {fmt_dollars(result.annual_ss_income)}/yr"
         f"  (starting age {ss_start_age})"
     )
+    if result.annual_pension_income > Decimal("0"):
+        pension_start_age = result.retirement_age + result.years_retirement_to_pension
+        lines.append(
+            f"[bold]Pension:[/bold]               {fmt_dollars(result.annual_pension_income)}/yr"
+            f"  (starting age {pension_start_age})"
+        )
     withdrawal = fmt_dollars(result.annual_portfolio_withdrawal_need)
     lines.append(f"[bold]Portfolio withdrawal:[/bold]  {withdrawal}/yr (year 1)")
     lines.append("")
@@ -75,6 +81,8 @@ def result_to_dict(result: ProjectionResult) -> dict[str, object]:
         "portfolio_at_retirement": float(result.portfolio_at_retirement),
         "annual_income_need": float(result.annual_income_need),
         "annual_ss_income": float(result.annual_ss_income),
+        "annual_pension_income": float(result.annual_pension_income),
+        "years_retirement_to_pension": result.years_retirement_to_pension,
         "annual_portfolio_withdrawal_need": float(result.annual_portfolio_withdrawal_need),
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
@@ -117,6 +125,13 @@ def render_household_result(result: HouseholdProjectionResult, owners: dict[str,
         o = owners[name]
         ss_amount = result.annual_ss_income_by_owner[name]
         lines.append(f"  {name.title()}:  {fmt_dollars(ss_amount)}/yr  (starting age {o.social_security_age})")
+    if result.total_annual_pension_income > Decimal("0"):
+        lines.append("[bold]Pension:[/bold]")
+        for name in result.owners:
+            o = owners[name]
+            pension_amount = result.annual_pension_income_by_owner[name]
+            if pension_amount > Decimal("0") and o.pension_age is not None:
+                lines.append(f"  {name.title()}:  {fmt_dollars(pension_amount)}/yr  (starting age {o.pension_age})")
     lines.append("")
     lines.append(f"[bold]Outcome:[/bold]  {outcome_icon}")
 
@@ -152,6 +167,14 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
             for name in result.owners
         },
         "total_annual_ss_income": float(result.total_annual_ss_income),
+        "pension_income_by_owner": {
+            name: {
+                "annual_amount": float(result.annual_pension_income_by_owner[name]),
+                "pension_age": owners[name].pension_age,
+            }
+            for name in result.owners
+        },
+        "total_annual_pension_income": float(result.total_annual_pension_income),
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,

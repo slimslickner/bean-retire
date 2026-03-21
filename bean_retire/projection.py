@@ -42,6 +42,8 @@ def drawdown(
     inflation_rate: Decimal,
     return_rate: Decimal,
     max_years: int,
+    pension_annual_income: Decimal = Decimal("0"),
+    pension_start_year: int = 0,
 ) -> tuple[list[Decimal], Optional[int]]:
     """
     Simulate annual portfolio drawdown.
@@ -58,7 +60,10 @@ def drawdown(
         ss_income = (
             ss_annual_income * inflation_factor if year >= ss_start_year else Decimal("0")
         )
-        withdrawal = max(inflated_need - ss_income, Decimal("0"))
+        pension_income = (
+            pension_annual_income * inflation_factor if year >= pension_start_year else Decimal("0")
+        )
+        withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
 
         portfolio -= withdrawal
         if portfolio <= 0:
@@ -81,6 +86,8 @@ def monte_carlo(
     retirement_age: int,
     n_simulations: int = 1000,
     return_stddev: float = 0.12,
+    pension_annual_income: float = 0.0,
+    pension_start_year: int = 0,
 ) -> MonteCarloResult:
     # return_stddev default kept for direct callers; project_owner passes config.return_stddev
     """
@@ -105,7 +112,8 @@ def monte_carlo(
             inflation_factor = (1 + inf_rate_float) ** year
             inflated_need = need_float * inflation_factor
             ss_income = ss_float * inflation_factor if year >= ss_start_year else 0.0
-            withdrawal = max(inflated_need - ss_income, 0.0)
+            pension_income = pension_annual_income * inflation_factor if year >= pension_start_year else 0.0
+            withdrawal = max(inflated_need - ss_income - pension_income, 0.0)
 
             sim_portfolio -= withdrawal
             if sim_portfolio <= 0:
@@ -177,16 +185,27 @@ def project_owner(
         Decimal("0.01")
     )
     annual_ss_income = (owner.social_security_monthly_estimate * 12).quantize(Decimal("0.01"))
+    annual_pension_income = (
+        (owner.pension_monthly_estimate * 12).quantize(Decimal("0.01"))
+        if owner.pension_monthly_estimate is not None
+        else Decimal("0")
+    )
 
-    # Years from retirement until SS kicks in (could be 0 if retiring after SS age)
+    # Years from retirement until SS / pension kicks in (0 if already past)
     years_retirement_to_ss = years_between(retirement_date, ss_date)
+    pension_date = owner.pension_date
+    years_retirement_to_pension = (
+        years_between(retirement_date, pension_date) if pension_date is not None else 0
+    )
 
     max_years_in_retirement = max(0, 100 - owner.retirement_age)
 
-    # Initial withdrawal need (first year of retirement, before SS)
+    # Initial withdrawal need (first year of retirement, accounting for any income already active)
+    ss_active_year1 = annual_ss_income if years_retirement_to_ss == 0 else Decimal("0")
+    pension_active_year1 = annual_pension_income if years_retirement_to_pension == 0 else Decimal("0")
     annual_portfolio_withdrawal_need = max(
         Decimal("0"),
-        annual_income_need - (annual_ss_income if years_retirement_to_ss == 0 else Decimal("0")),
+        annual_income_need - ss_active_year1 - pension_active_year1,
     )
 
     # Fixed-rate drawdown
@@ -198,6 +217,8 @@ def project_owner(
         inflation_rate=config.inflation_rate,
         return_rate=config.annual_return_rate,
         max_years=max_years_in_retirement,
+        pension_annual_income=annual_pension_income,
+        pension_start_year=years_retirement_to_pension,
     )
 
     depletion_age = (
@@ -217,6 +238,8 @@ def project_owner(
             retirement_age=owner.retirement_age,
             n_simulations=config.simulation_count,
             return_stddev=config.return_stddev,
+            pension_annual_income=float(annual_pension_income),
+            pension_start_year=years_retirement_to_pension,
         )
 
     return ProjectionResult(
@@ -225,9 +248,11 @@ def project_owner(
         retirement_age=owner.retirement_age,
         social_security_age=owner.social_security_age,
         years_retirement_to_ss=years_retirement_to_ss,
+        years_retirement_to_pension=years_retirement_to_pension,
         portfolio_at_retirement=portfolio_at_retirement.quantize(Decimal("0.01")),
         annual_income_need=annual_income_need,
         annual_ss_income=annual_ss_income,
+        annual_pension_income=annual_pension_income,
         annual_portfolio_withdrawal_need=annual_portfolio_withdrawal_need,
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
@@ -374,6 +399,14 @@ def project_household(
         o.name: (o.social_security_monthly_estimate * 12).quantize(Decimal("0.01"))
         for o in owners_sorted
     }
+    annual_pension: dict[str, Decimal] = {
+        o.name: (
+            (o.pension_monthly_estimate * 12).quantize(Decimal("0.01"))
+            if o.pension_monthly_estimate is not None
+            else Decimal("0")
+        )
+        for o in owners_sorted
+    }
 
     # Year offsets from first_retirement_date for per-owner events.
     # years_between clamps to 0, so if an event precedes first_retirement_date
@@ -390,9 +423,18 @@ def project_household(
     youngest_age_at_first = years_between(youngest.birth_date, first_retirement_date)
     max_years = max(0, 100 - youngest_age_at_first)
 
+    years_until_pension = {
+        o.name: (
+            years_between(first_retirement_date, o.pension_date)
+            if o.pension_date is not None
+            else max_years + 1  # never active
+        )
+        for o in owners_sorted
+    }
+
     # Pre-compute per-year schedules to avoid repeated comprehension inside the loop.
     # contrib_by_year[y] — total annual contributions from owners still working in year y
-    # ss_by_year[y]      — total nominal SS income from owners who have reached SS age by year y
+    # ss_by_year[y]      — total nominal SS+pension income active in year y
     contrib_by_year: list[Decimal] = [
         sum(
             (_contrib(o) for o in owners_sorted if year < years_until_retired[o.name]),
@@ -403,6 +445,10 @@ def project_household(
     ss_by_year: list[Decimal] = [
         sum(
             (annual_ss[o.name] for o in owners_sorted if year >= years_until_ss[o.name]),
+            Decimal("0"),
+        )
+        + sum(
+            (annual_pension[o.name] for o in owners_sorted if year >= years_until_pension[o.name]),
             Decimal("0"),
         )
         for year in range(max_years)
@@ -454,7 +500,9 @@ def project_household(
         combined_portfolio_at_first_retirement=combined_at_first.quantize(Decimal("0.01")),
         annual_income_need=annual_income_need,
         annual_ss_income_by_owner=annual_ss,
+        annual_pension_income_by_owner=annual_pension,
         total_annual_ss_income=sum(annual_ss.values(), Decimal("0")),
+        total_annual_pension_income=sum(annual_pension.values(), Decimal("0")),
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,

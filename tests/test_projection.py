@@ -178,6 +178,33 @@ def test_project_person1(ledger):
     assert result.annual_ss_income == Decimal("28800")  # 2400 × 12
 
 
+def test_project_person1_pension_income(ledger):
+    config = ProjectionConfig()
+    result = project_owner(
+        owner=ledger["owners"]["person1"],
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+    )
+    assert result.annual_pension_income == Decimal("12000")  # 1000 × 12
+    assert result.years_retirement_to_pension == 0  # pension starts at retirement age
+
+
+def test_project_person2_no_pension(ledger):
+    config = ProjectionConfig()
+    result = project_owner(
+        owner=ledger["owners"]["person2"],
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+    )
+    assert result.annual_pension_income == Decimal("0")
+
+
 def test_project_person2(ledger):
     config = ProjectionConfig()
     result = project_owner(
@@ -299,6 +326,12 @@ def test_household_ss_stacks(household_result):
     assert household_result.annual_ss_income_by_owner["person1"] == Decimal("28800")
     assert household_result.annual_ss_income_by_owner["person2"] == Decimal("21600")
     assert household_result.total_annual_ss_income == Decimal("50400")
+
+
+def test_household_pension_income(household_result):
+    assert household_result.annual_pension_income_by_owner["person1"] == Decimal("12000")
+    assert household_result.annual_pension_income_by_owner["person2"] == Decimal("0")
+    assert household_result.total_annual_pension_income == Decimal("12000")
 
 
 def test_household_sustainable(household_result):

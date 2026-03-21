@@ -40,6 +40,18 @@ def test_person2_owner_fields(ledger):
     assert person2.social_security_monthly_estimate == Decimal("1800")
 
 
+def test_person1_pension_fields(ledger):
+    person1 = ledger["owners"]["person1"]
+    assert person1.pension_age == 57
+    assert person1.pension_monthly_estimate == Decimal("1000")
+
+
+def test_person2_no_pension(ledger):
+    person2 = ledger["owners"]["person2"]
+    assert person2.pension_age is None
+    assert person2.pension_monthly_estimate is None
+
+
 def test_person1_retirement_date(ledger):
     assert ledger["owners"]["person1"].retirement_date == date(2042, 3, 15)
 
