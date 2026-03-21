@@ -7,13 +7,13 @@ Retirement projection tool for [Beancount](https://github.com/beancount/beancoun
 Requires Python 3.11+.
 
 ```bash
-pip install bean-retire
+uv add git+https://github.com/slimslickner/bean-retire
 ```
 
 Or for development:
 
 ```bash
-git clone https://github.com/yourname/bean-retire
+git clone https://github.com/slimslickner/bean-retire
 cd bean-retire
 uv sync
 ```
