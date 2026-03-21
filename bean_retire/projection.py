@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from .models import (
+    DetailRow,
     HouseholdProjectionResult,
     MonteCarloResult,
     Owner,
@@ -73,6 +74,141 @@ def drawdown(
         year_balances.append(portfolio)
 
     return year_balances, None
+
+
+def _owner_detail_rows(
+    portfolio: Decimal,
+    annual_income_need: Decimal,
+    ss_annual_income: Decimal,
+    ss_start_year: int,
+    pension_annual_income: Decimal,
+    pension_start_year: int,
+    inflation_rate: Decimal,
+    return_rate: Decimal,
+    max_years: int,
+    retirement_age: int,
+    retirement_year: int,    # calendar year of retirement
+) -> list[DetailRow]:
+    """Compute per-year detail rows for a single-owner projection."""
+    rows: list[DetailRow] = []
+
+    for year in range(max_years):
+        inflation_factor = (Decimal("1") + inflation_rate) ** year
+        inflated_need = annual_income_need * inflation_factor
+
+        ss_active = year >= ss_start_year
+        pension_active = year >= pension_start_year
+        ss_income = ss_annual_income * inflation_factor if ss_active else Decimal("0")
+        pension_income = pension_annual_income * inflation_factor if pension_active else Decimal("0")
+        withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
+
+        portfolio_start = portfolio
+        portfolio -= withdrawal
+        depleted = portfolio <= 0
+
+        growth = portfolio * return_rate if not depleted else Decimal("0")
+        portfolio_end = portfolio + growth if not depleted else Decimal("0")
+
+        life_events: list[str] = []
+        if year == ss_start_year and ss_annual_income > 0:
+            life_events.append("Social Security started")
+        if year == pension_start_year and pension_annual_income > 0:
+            life_events.append("Pension started")
+
+        rows.append(DetailRow(
+            year_index=year,
+            calendar_year=retirement_year + year,
+            age=retirement_age + year,
+            portfolio_start=portfolio_start.quantize(Decimal("0.01")),
+            income_ss=ss_income.quantize(Decimal("0.01")),
+            income_pension=pension_income.quantize(Decimal("0.01")),
+            contributions=Decimal("0"),
+            withdrawal=withdrawal.quantize(Decimal("0.01")),
+            investment_return=growth.quantize(Decimal("0.01")),
+            portfolio_end=portfolio_end.quantize(Decimal("0.01")),
+            life_events=life_events,
+        ))
+
+        if depleted:
+            break
+        portfolio = portfolio_end
+
+    return rows
+
+
+def _household_detail_rows(
+    combined: Decimal,
+    annual_income_need: Decimal,
+    ss_by_year: list[Decimal],
+    contrib_by_year: list[Decimal],
+    inflation_rate: Decimal,
+    return_rate: Decimal,
+    max_years: int,
+    youngest_age_at_first: int,
+    first_retirement_year: int,
+    annual_ss: dict[str, Decimal],
+    annual_pension: dict[str, Decimal],
+    years_until_ss: dict[str, int],
+    years_until_pension: dict[str, int],
+    years_until_retired: dict[str, int],
+    owner_names: list[str],
+) -> list[DetailRow]:
+    """Compute per-year detail rows for a household projection."""
+    rows: list[DetailRow] = []
+
+    for year in range(max_years):
+        inflation_factor = (Decimal("1") + inflation_rate) ** year
+        inflated_need = annual_income_need * inflation_factor
+        inflated_ss = ss_by_year[year] * inflation_factor
+
+        # Break combined income into SS and pension components for display
+        ss_this_year = sum(
+            (annual_ss[n] for n in owner_names if year >= years_until_ss[n]),
+            Decimal("0"),
+        ) * inflation_factor
+        pension_this_year = sum(
+            (annual_pension[n] for n in owner_names if year >= years_until_pension[n]),
+            Decimal("0"),
+        ) * inflation_factor
+
+        withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+
+        portfolio_start = combined
+        combined -= withdrawal
+        depleted = combined <= Decimal("0")
+
+        growth = combined * return_rate if not depleted else Decimal("0")
+        contrib = contrib_by_year[year] if not depleted else Decimal("0")
+        portfolio_end = combined + growth + contrib if not depleted else Decimal("0")
+
+        life_events: list[str] = []
+        for name in owner_names:
+            if year == years_until_ss[name]:
+                life_events.append(f"{name.title()} Social Security started")
+            if year == years_until_pension[name] and annual_pension[name] > 0:
+                life_events.append(f"{name.title()} pension started")
+            if year == years_until_retired[name] and years_until_retired[name] > 0:
+                life_events.append(f"{name.title()} retired")
+
+        rows.append(DetailRow(
+            year_index=year,
+            calendar_year=first_retirement_year + year,
+            age=youngest_age_at_first + year,
+            portfolio_start=portfolio_start.quantize(Decimal("0.01")),
+            income_ss=ss_this_year.quantize(Decimal("0.01")),
+            income_pension=pension_this_year.quantize(Decimal("0.01")),
+            contributions=contrib.quantize(Decimal("0.01")),
+            withdrawal=withdrawal.quantize(Decimal("0.01")),
+            investment_return=growth.quantize(Decimal("0.01")),
+            portfolio_end=portfolio_end.quantize(Decimal("0.01")),
+            life_events=life_events,
+        ))
+
+        if depleted:
+            break
+        combined = portfolio_end
+
+    return rows
 
 
 def monte_carlo(
@@ -225,6 +361,20 @@ def project_owner(
         owner.retirement_age + depletion_year if depletion_year is not None else None
     )
 
+    detail = _owner_detail_rows(
+        portfolio=portfolio_at_retirement,
+        annual_income_need=annual_income_need,
+        ss_annual_income=annual_ss_income,
+        ss_start_year=years_retirement_to_ss,
+        pension_annual_income=annual_pension_income,
+        pension_start_year=years_retirement_to_pension,
+        inflation_rate=config.inflation_rate,
+        return_rate=config.annual_return_rate,
+        max_years=max_years_in_retirement,
+        retirement_age=owner.retirement_age,
+        retirement_year=retirement_date.year,
+    )
+
     mc_result = None
     if run_monte_carlo:
         mc_result = monte_carlo(
@@ -257,6 +407,7 @@ def project_owner(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
         monte_carlo_result=mc_result,
     )
@@ -478,6 +629,24 @@ def project_household(
         youngest_age_at_first + depletion_year if depletion_year is not None else None
     )
 
+    detail = _household_detail_rows(
+        combined=combined_at_first,
+        annual_income_need=annual_income_need,
+        ss_by_year=ss_by_year,
+        contrib_by_year=contrib_by_year,
+        inflation_rate=config.inflation_rate,
+        return_rate=config.annual_return_rate,
+        max_years=max_years,
+        youngest_age_at_first=youngest_age_at_first,
+        first_retirement_year=first_retirement_date.year,
+        annual_ss=annual_ss,
+        annual_pension=annual_pension,
+        years_until_ss=years_until_ss,
+        years_until_pension=years_until_pension,
+        years_until_retired=years_until_retired,
+        owner_names=[o.name for o in owners_sorted],
+    )
+
     mc_result = None
     if run_monte_carlo:
         mc_result = _household_monte_carlo(
@@ -506,6 +675,7 @@ def project_household(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
         monte_carlo_result=mc_result,
     )

@@ -7,8 +7,9 @@ from decimal import Decimal
 import click
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
-from .models import HouseholdProjectionResult, Owner, ProjectionConfig, ProjectionResult
+from .models import DetailRow, HouseholdProjectionResult, Owner, ProjectionConfig, ProjectionResult
 from .parser import parse_ledger
 from .projection import project_household, project_owner
 
@@ -21,6 +22,55 @@ def fmt_dollars(amount: Decimal) -> str:
 
 def fmt_pct(rate: float) -> str:
     return f"{rate:.1%}"
+
+
+def render_detail_table(rows: list[DetailRow], title: str) -> Table:
+    table = Table(title=title, show_lines=False, expand=False)
+    table.add_column("Year", justify="right", style="dim")
+    table.add_column("Age", justify="right")
+    table.add_column("Portfolio Start", justify="right")
+    table.add_column("Income (SS+Pension)", justify="right", style="green")
+    table.add_column("Contributions", justify="right", style="cyan")
+    table.add_column("Withdrawal", justify="right", style="red")
+    table.add_column("Return", justify="right")
+    table.add_column("Portfolio End", justify="right", style="bold")
+    table.add_column("Events", style="yellow")
+
+    for row in rows:
+        income = row.income_ss + row.income_pension
+        events = ", ".join(row.life_events)
+        table.add_row(
+            str(row.calendar_year),
+            str(row.age),
+            fmt_dollars(row.portfolio_start),
+            fmt_dollars(income) if income else "—",
+            fmt_dollars(row.contributions) if row.contributions else "—",
+            fmt_dollars(row.withdrawal),
+            fmt_dollars(row.investment_return),
+            fmt_dollars(row.portfolio_end) if row.portfolio_end else "[red]depleted[/red]",
+            events,
+        )
+
+    return table
+
+
+def detail_rows_to_list(rows: list[DetailRow]) -> list[dict]:
+    return [
+        {
+            "year_index": r.year_index,
+            "calendar_year": r.calendar_year,
+            "age": r.age,
+            "portfolio_start": float(r.portfolio_start),
+            "income_ss": float(r.income_ss),
+            "income_pension": float(r.income_pension),
+            "contributions": float(r.contributions),
+            "withdrawal": float(r.withdrawal),
+            "investment_return": float(r.investment_return),
+            "portfolio_end": float(r.portfolio_end),
+            "life_events": r.life_events,
+        }
+        for r in rows
+    ]
 
 
 def render_result(result: ProjectionResult) -> Panel:
@@ -87,6 +137,7 @@ def result_to_dict(result: ProjectionResult) -> dict[str, object]:
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
+        "detail": detail_rows_to_list(result.detail_rows),
         "monte_carlo": None,
     }
     if result.monte_carlo_result is not None:
@@ -178,6 +229,7 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
+        "detail": detail_rows_to_list(result.detail_rows),
         "monte_carlo": None,
     }
     if result.monte_carlo_result is not None:
@@ -211,6 +263,8 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
               help="What-if overrides, e.g. --scenario spending-ratio=0.70")
 @click.option("--as-of-date", default=None, metavar="YYYY-MM-DD",
               help="Override the reference date for spending and contribution windows (default: today).")
+@click.option("--detail", "show_detail", is_flag=True, default=False,
+              help="Show year-by-year drawdown table.")
 def main(
     ledger_file,
     owner,
@@ -223,6 +277,7 @@ def main(
     output_json,
     scenario,
     as_of_date,
+    show_detail,
 ):
     """Project retirement outcomes from a Beancount ledger."""
     # Parse --scenario overrides
@@ -303,6 +358,12 @@ def main(
         else:
             console.print()
             console.print(render_result(per_owner_result))
+            if show_detail:
+                console.print()
+                console.print(render_detail_table(
+                    per_owner_result.detail_rows,
+                    title=f"{owner.title()} — Year-by-Year Drawdown",
+                ))
             console.print()
     else:
         # Household mode (default): all owners, spending counted once
@@ -323,9 +384,18 @@ def main(
                 "mode": "household",
                 "config": config_dict,
                 "spending_baseline": spending_dict,
-                "household": household_result_to_dict(household, all_owners),
+                "household": {
+                    **household_result_to_dict(household, all_owners),
+                    "detail": detail_rows_to_list(household.detail_rows),
+                },
             }, indent=2))
         else:
             console.print()
             console.print(render_household_result(household, all_owners))
+            if show_detail:
+                console.print()
+                console.print(render_detail_table(
+                    household.detail_rows,
+                    title="Household — Year-by-Year Drawdown",
+                ))
             console.print()

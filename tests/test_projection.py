@@ -339,6 +339,52 @@ def test_household_sustainable(household_result):
     assert household_result.depletion_age is None
 
 
+def test_owner_detail_rows_populated(ledger):
+    config = ProjectionConfig()
+    result = project_owner(
+        owner=ledger["owners"]["person1"],
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+    )
+    assert len(result.detail_rows) > 0
+    first = result.detail_rows[0]
+    assert first.year_index == 0
+    assert first.calendar_year == 2042
+    assert first.age == 57
+    # pension starts at retirement for person1 — should appear in year 0 life events
+    assert any("pension" in e.lower() for e in first.life_events)
+    # portfolio_end should be close to fixed_rate_balances[0] (detail rows round to cents)
+    assert abs(result.detail_rows[0].portfolio_end - result.fixed_rate_balances[0]) < Decimal("1")
+
+
+def test_owner_detail_ss_starts_at_correct_year(ledger):
+    config = ProjectionConfig()
+    result = project_owner(
+        owner=ledger["owners"]["person1"],
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+    )
+    # person1: retirement age 57, SS age 67 → SS starts in year 10
+    ss_row = result.detail_rows[10]
+    assert any("Social Security" in e for e in ss_row.life_events)
+    assert ss_row.income_ss > Decimal("0")
+    # year 9 should have no SS income
+    assert result.detail_rows[9].income_ss == Decimal("0")
+
+
+def test_household_detail_rows_populated(household_result):
+    assert len(household_result.detail_rows) > 0
+    first = household_result.detail_rows[0]
+    assert first.year_index == 0
+    assert first.calendar_year == 2042
+
+
 def test_household_no_mc_by_default(household_result):
     assert household_result.monte_carlo_result is None
     assert household_result.simulation_count == 0

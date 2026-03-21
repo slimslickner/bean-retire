@@ -77,6 +77,21 @@ class ProjectionConfig:
 
 
 @dataclass
+class DetailRow:
+    year_index: int            # 0-based from retirement / first retirement
+    calendar_year: int
+    age: int                   # owner age (youngest owner for household)
+    portfolio_start: Decimal
+    income_ss: Decimal         # SS income received this year
+    income_pension: Decimal    # pension income received this year
+    contributions: Decimal     # working-spouse contributions (household only)
+    withdrawal: Decimal        # net withdrawal from portfolio
+    investment_return: Decimal # growth earned this year
+    portfolio_end: Decimal     # end-of-year balance (None if depleted)
+    life_events: list[str]     # human-readable events this year
+
+
+@dataclass
 class MonteCarloResult:
     probability_sustainable: float
     median_depletion_age: Optional[int]
@@ -101,8 +116,13 @@ class ProjectionResult:
     years_to_depletion: Optional[int]          # years from retirement; None if sustainable
     depletion_age: Optional[int]               # retirement_age + years_to_depletion
     fixed_rate_balances: list[Decimal]         # year-by-year portfolio balances
+    detail_rows: list[DetailRow] = None        # type: ignore[assignment]
     simulation_count: int = 0                  # n_simulations used; 0 if MC not run
     monte_carlo_result: Optional[MonteCarloResult] = None
+
+    def __post_init__(self):
+        if self.detail_rows is None:
+            self.detail_rows = []
 
 
 @dataclass
@@ -119,5 +139,10 @@ class HouseholdProjectionResult:
     years_to_depletion: Optional[int]                   # from first retirement; None = sustainable
     depletion_age: Optional[int]                        # youngest owner's age at depletion
     fixed_rate_balances: list[Decimal]
+    detail_rows: list[DetailRow] = None        # type: ignore[assignment]
     simulation_count: int = 0
     monte_carlo_result: Optional[MonteCarloResult] = None
+
+    def __post_init__(self):
+        if self.detail_rows is None:
+            self.detail_rows = []
