@@ -49,21 +49,21 @@ Add one `custom "owner"` directive per person. All five metadata fields are requ
 
 ### 2. Retirement account metadata
 
-Tag each retirement account `Open` directive with `owner` and `tax-account-type`.
+Tag each retirement account `Open` directive with `account-owner` and `tax-account-type`.
 
 ```beancount
 2020-01-01 open Assets:Investment:Retirement:Person1s-401k USD
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "split"
   traditional-percent: "65"
   roth-percent: "35"
 
 2020-01-01 open Assets:Investment:Retirement:Person1s-Roth-IRA USD
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "roth"
 
 2020-01-01 open Assets:Investment:Retirement:Person2s-403b USD
-  owner: "person2"
+  account-owner: "person2"
   tax-account-type: "traditional"
 ```
 
@@ -90,12 +90,12 @@ Assets:Investment:Retirement:CapTech-Capital-Group-401k:VFIAX
 Assets:Investment:Retirement:CapTech-Capital-Group-401k:VTMGX
 ```
 
-**Only the parent account needs metadata.** Sub-accounts require no `owner` or `tax-account-type` — bean-retire aggregates them automatically.
+**Only the parent account needs metadata.** Sub-accounts require no `account-owner` or `tax-account-type` — bean-retire aggregates them automatically.
 
 ```beancount
 ; Tag the parent with metadata
 2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "traditional"
 
 ; Sub-accounts: no metadata needed
@@ -187,13 +187,16 @@ bean-retire ledger.beancount --json
 
 ## JSON output schema
 
-Schema version `1.0`. Stable interface for downstream tools and LLM integration.
+Schema version `1.1`. Stable interface for downstream tools and LLM integration.
+
+### Household mode (default)
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "generated_at": "2026-03-20T14:00:00",
   "ledger_file": "ledger.beancount",
+  "mode": "household",
   "config": {
     "spending_ratio": 0.8,
     "annual_return_rate": 0.07,
@@ -204,6 +207,35 @@ Schema version `1.0`. Stable interface for downstream tools and LLM integration.
     "years_averaged": 3,
     "inflation_adjusted": true
   },
+  "household": {
+    "owners": ["person1", "person2"],
+    "first_retirement_date": "2042-03-15",
+    "first_retirement_age": 57,
+    "combined_portfolio_at_first_retirement": 2100000.0,
+    "annual_income_need": 35656.62,
+    "ss_income_by_owner": {
+      "person1": {"annual_amount": 28800.0, "social_security_age": 67},
+      "person2": {"annual_amount": 21600.0, "social_security_age": 67}
+    },
+    "total_annual_ss_income": 50400.0,
+    "years_to_depletion": null,
+    "depletion_age": null,
+    "sustainable": true,
+    "monte_carlo": null
+  }
+}
+```
+
+### Per-owner mode (`--owner NAME`)
+
+```json
+{
+  "schema_version": "1.1",
+  "generated_at": "2026-03-20T14:00:00",
+  "ledger_file": "ledger.beancount",
+  "mode": "per_owner",
+  "config": { "...": "..." },
+  "spending_baseline": { "...": "..." },
   "projections": [
     {
       "owner": "person1",
@@ -252,9 +284,18 @@ Beancount's own loader errors are also printed to stderr.
 
 ## How projections work
 
-**Accumulation phase** (today → retirement date): current portfolio grows at `annual_return_rate`, with annual contributions (derived from the trailing 2-year average of inflows to tagged accounts) added at year-end.
+### Household mode (default)
 
-**Drawdown phase** (retirement → age 100): each year, spending need is inflated by `inflation_rate`. Social Security income (also inflation-adjusted) is subtracted once the owner reaches `social-security-age`. The remainder is withdrawn from the portfolio, which then earns `annual_return_rate` on what remains.
+Running `bean-retire` without `--owner` projects the entire household together:
+
+- **Spending is counted once** — the household spending baseline is not duplicated per owner.
+- **Accumulation phase** (today → first retirement date): each owner's portfolio grows independently at `annual_return_rate`, with annual contributions (derived from the trailing 2-year average of inflows to tagged accounts) added at year-end. All portfolios are merged into a single combined pool at the first owner's retirement date.
+- **Overlap period**: if some owners retire before others, the still-working owners' contributions continue flowing into the combined pool, reducing drawdown pressure.
+- **Joint drawdown phase** (first retirement → youngest owner's age 100): each year, inflation-adjusted household spending minus stacked Social Security income is withdrawn from the combined pool. Social Security income from each owner is added once that owner reaches their `social-security-age`.
+
+### Per-owner mode (`--owner NAME`)
+
+Passing `--owner` projects a single owner independently against the full household spending baseline — equivalent to the previous default behavior. Useful for understanding each person's individual retirement trajectory.
 
 **Spending baseline**: trailing 3-year average of `Expenses:*` postings, with each year's total inflated to today's dollars using `inflation_rate`. Multiplied by `spending_ratio` (default 0.80) to get the retirement income target.
 

@@ -3703,11 +3703,11 @@ option "operating_currency" "USD"
 
 2013-01-01 open Assets:US:Vanguard:VBMPX                     VBMPX
   number: "882882"
-  owner: "person"
+  account-owner: "person"
   tax-account-type: "traditional"
 2013-01-01 open Assets:US:Vanguard:RGAGX                     RGAGX
   number: "882882"
-  owner: "person"
+  account-owner: "person"
   tax-account-type: "traditional"
 2013-01-01 open Assets:US:Vanguard                            USD
   address: "P.O. Box 1110, Valley Forge, PA 19482-1110"
@@ -3716,7 +3716,7 @@ option "operating_currency" "USD"
 2013-01-01 open Income:US:Hoogle:Match401k                   USD
 2013-01-01 open Assets:US:Vanguard:Cash                       USD
   number: "882882"
-  owner: "person"
+  account-owner: "person"
   tax-account-type: "traditional"
 
 2013-01-04 * "Employer match for contribution"

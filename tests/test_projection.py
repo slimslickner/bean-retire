@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from bean_retire.models import ProjectionConfig
+from bean_retire.models import HouseholdProjectionResult, ProjectionConfig
 from bean_retire.parser import parse_ledger
-from bean_retire.projection import accumulate, drawdown, project_owner, years_between
+from bean_retire.projection import accumulate, drawdown, project_household, project_owner, years_between
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.beancount"
 TODAY = date(2026, 3, 20)
@@ -248,3 +248,82 @@ def test_project_no_monte_carlo_by_default(ledger):
         today=TODAY,
     )
     assert result.monte_carlo_result is None
+
+
+# ─── project_household (integration) ──────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def household_result(ledger):
+    return project_household(
+        owners=list(ledger["owners"].values()),
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=ProjectionConfig(),
+        today=TODAY,
+    )
+
+
+def test_household_result_type(household_result):
+    assert isinstance(household_result, HouseholdProjectionResult)
+
+
+def test_household_spending_not_doubled(household_result, ledger):
+    # Household income need = spending_baseline × ratio (once), not per owner
+    config = ProjectionConfig()
+    expected = (ledger["spending"].annual_amount * config.spending_ratio).quantize(Decimal("0.01"))
+    assert household_result.annual_income_need == expected
+
+
+def test_household_first_retiree_is_person1(household_result):
+    # person1 retires 2042-03-15, person2 retires 2042-06-20 → person1 is first
+    assert household_result.first_retirement_date == date(2042, 3, 15)
+    assert household_result.owners[0] == "person1"
+    assert household_result.first_retirement_age == 57
+
+
+def test_household_combined_portfolio_greater_than_either_owner(household_result, ledger):
+    config = ProjectionConfig()
+    r1 = project_owner(
+        owner=ledger["owners"]["person1"],
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+    )
+    assert household_result.combined_portfolio_at_first_retirement > r1.portfolio_at_retirement
+
+
+def test_household_ss_stacks(household_result):
+    assert household_result.annual_ss_income_by_owner["person1"] == Decimal("28800")
+    assert household_result.annual_ss_income_by_owner["person2"] == Decimal("21600")
+    assert household_result.total_annual_ss_income == Decimal("50400")
+
+
+def test_household_sustainable(household_result):
+    assert household_result.years_to_depletion is None
+    assert household_result.depletion_age is None
+
+
+def test_household_no_mc_by_default(household_result):
+    assert household_result.monte_carlo_result is None
+    assert household_result.simulation_count == 0
+
+
+def test_household_monte_carlo_runs(ledger):
+    random.seed(42)
+    config = ProjectionConfig(simulation_count=500)
+    result = project_household(
+        owners=list(ledger["owners"].values()),
+        accounts=ledger["accounts"],
+        contributions=ledger["contributions"],
+        spending=ledger["spending"],
+        config=config,
+        today=TODAY,
+        run_monte_carlo=True,
+    )
+    mc = result.monte_carlo_result
+    assert mc is not None
+    assert 0.0 <= mc.probability_sustainable <= 1.0
+    assert result.simulation_count == 500

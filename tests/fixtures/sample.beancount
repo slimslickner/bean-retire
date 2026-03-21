@@ -20,17 +20,17 @@ option "operating_currency" "USD"
 2020-01-01 open Equity:Stub
 
 2020-01-01 open Assets:Investment:Retirement:Person1s-401k USD
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "split"
   traditional-percent: "65"
   roth-percent: "35"
 
 2020-01-01 open Assets:Investment:Retirement:Person1s-Roth-IRA USD
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "roth"
 
 2020-01-01 open Assets:Investment:Retirement:Person2s-403b USD
-  owner: "person2"
+  account-owner: "person2"
   tax-account-type: "traditional"
 
 2020-01-01 open Expenses:Housing USD

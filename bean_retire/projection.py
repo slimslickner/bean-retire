@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from .models import (
+    HouseholdProjectionResult,
     MonteCarloResult,
     Owner,
     ProjectionConfig,
@@ -228,6 +229,232 @@ def project_owner(
         annual_income_need=annual_income_need,
         annual_ss_income=annual_ss_income,
         annual_portfolio_withdrawal_need=annual_portfolio_withdrawal_need,
+        years_to_depletion=depletion_year,
+        depletion_age=depletion_age,
+        fixed_rate_balances=year_balances,
+        simulation_count=config.simulation_count if run_monte_carlo else 0,
+        monte_carlo_result=mc_result,
+    )
+
+
+def _household_monte_carlo(
+    combined_pool: float,
+    annual_income_need: float,
+    contribution_schedule: list[float],
+    ss_schedule: list[float],
+    inflation_rate: float,
+    mean_return_rate: float,
+    max_years: int,
+    youngest_age_at_first_retirement: int,
+    n_simulations: int,
+    return_stddev: float,
+) -> MonteCarloResult:
+    """
+    Monte Carlo simulation for household drawdown.
+
+    contribution_schedule[year] — nominal annual contributions from still-working
+    owners in each simulation year (pre-computed; indexed from first retirement).
+    ss_schedule[year] — nominal annual SS income from all owners who have reached
+    their SS age by that year (also pre-computed; inflation is applied in-loop).
+    depletion_age is expressed as the youngest owner's age, since the youngest
+    person determines the simulation horizon (lives longest).
+    """
+    depletion_ages: list[Optional[int]] = []
+
+    for _ in range(n_simulations):
+        sim_portfolio = combined_pool
+        depleted_age = None
+
+        for year in range(max_years):
+            annual_return = max(-1.0, random.gauss(mean_return_rate, return_stddev))
+            inflation_factor = (1 + inflation_rate) ** year
+            inflated_need = annual_income_need * inflation_factor
+            inflated_ss = ss_schedule[year] * inflation_factor
+            withdrawal = max(inflated_need - inflated_ss, 0.0)
+
+            sim_portfolio -= withdrawal
+            if sim_portfolio <= 0:
+                depleted_age = youngest_age_at_first_retirement + year
+                break
+
+            sim_portfolio *= 1 + annual_return
+            sim_portfolio += contribution_schedule[year]
+
+        depletion_ages.append(depleted_age)
+
+    n_sustainable = sum(1 for d in depletion_ages if d is None)
+    probability_sustainable = n_sustainable / n_simulations
+    depleted = sorted(d for d in depletion_ages if d is not None)
+
+    if not depleted:
+        return MonteCarloResult(
+            probability_sustainable=probability_sustainable,
+            median_depletion_age=None,
+            p10_depletion_age=None,
+            p90_depletion_age=None,
+        )
+
+    n = len(depleted)
+    return MonteCarloResult(
+        probability_sustainable=probability_sustainable,
+        median_depletion_age=depleted[n // 2],
+        p10_depletion_age=depleted[int(n * 0.10)],
+        p90_depletion_age=depleted[min(int(n * 0.90), n - 1)],
+    )
+
+
+def project_household(
+    owners: list[Owner],
+    accounts: list[RetirementAccount],
+    contributions: dict[str, Decimal],
+    spending: SpendingBaseline,
+    config: ProjectionConfig,
+    today: Optional[date] = None,
+    run_monte_carlo: bool = False,
+) -> HouseholdProjectionResult:
+    """
+    Project retirement outcomes for a household of one or more owners.
+
+    Unlike running per-owner projections, this function:
+
+    - Counts household spending ONCE (not duplicated per owner)
+    - Handles the overlap period when some owners have retired while others
+      are still working: future contributions from working owners continue
+      flowing into the combined portfolio pool, reducing drawdown pressure
+    - Stacks Social Security income from all owners as each reaches their SS age
+
+    Phases:
+    1. Accumulation (today → first retirement date): each owner's portfolio
+       grows independently with their own balance, contributions, and the shared
+       return rate. All portfolios are merged into a single pool at the first
+       owner's retirement date.
+    2. Joint drawdown (first retirement → youngest owner's age 100): each year,
+       inflation-adjusted household spending minus stacked SS income is withdrawn
+       from the combined pool. Owners still working contribute to the pool after
+       each year's growth.
+
+    Use ``--owner NAME`` (CLI) to project a single owner independently against
+    the full household spending baseline.
+    """
+    if today is None:
+        today = date.today()
+
+    owners_sorted = sorted(owners, key=lambda o: o.retirement_date)
+    first_retiree = owners_sorted[0]
+    first_retirement_date = first_retiree.retirement_date
+
+    # Youngest owner (latest birth date) has the longest expected lifespan and
+    # determines the simulation horizon.
+    youngest = max(owners, key=lambda o: o.birth_date)
+
+    def _balance(o: Owner) -> Decimal:
+        return sum(
+            (a.current_balance for a in accounts if a.owner == o.name),
+            Decimal("0"),
+        )
+
+    def _contrib(o: Owner) -> Decimal:
+        return sum(
+            (contributions.get(a.account_name, Decimal("0")) for a in accounts if a.owner == o.name),
+            Decimal("0"),
+        )
+
+    years_to_first = years_between(today, first_retirement_date)
+
+    # Phase 1: each owner accumulates independently to the first retirement date.
+    # Owners who retire later continue contributing via contrib_by_year after this.
+    portfolios_at_first = {
+        o.name: accumulate(_balance(o), _contrib(o), years_to_first, config.annual_return_rate)
+        for o in owners_sorted
+    }
+    combined_at_first = sum(portfolios_at_first.values(), Decimal("0"))
+
+    annual_income_need = (spending.annual_amount * config.spending_ratio).quantize(Decimal("0.01"))
+    annual_ss: dict[str, Decimal] = {
+        o.name: (o.social_security_monthly_estimate * 12).quantize(Decimal("0.01"))
+        for o in owners_sorted
+    }
+
+    # Year offsets from first_retirement_date for per-owner events.
+    # years_between clamps to 0, so if an event precedes first_retirement_date
+    # it is treated as already active from simulation year 0.
+    years_until_retired = {
+        o.name: years_between(first_retirement_date, o.retirement_date)
+        for o in owners_sorted
+    }
+    years_until_ss = {
+        o.name: years_between(first_retirement_date, o.social_security_date)
+        for o in owners_sorted
+    }
+
+    youngest_age_at_first = years_between(youngest.birth_date, first_retirement_date)
+    max_years = max(0, 100 - youngest_age_at_first)
+
+    # Pre-compute per-year schedules to avoid repeated comprehension inside the loop.
+    # contrib_by_year[y] — total annual contributions from owners still working in year y
+    # ss_by_year[y]      — total nominal SS income from owners who have reached SS age by year y
+    contrib_by_year: list[Decimal] = [
+        sum(
+            (_contrib(o) for o in owners_sorted if year < years_until_retired[o.name]),
+            Decimal("0"),
+        )
+        for year in range(max_years)
+    ]
+    ss_by_year: list[Decimal] = [
+        sum(
+            (annual_ss[o.name] for o in owners_sorted if year >= years_until_ss[o.name]),
+            Decimal("0"),
+        )
+        for year in range(max_years)
+    ]
+
+    # Fixed-rate drawdown
+    combined = combined_at_first
+    year_balances: list[Decimal] = []
+    depletion_year: Optional[int] = None
+
+    for year in range(max_years):
+        inflation_factor = (Decimal("1") + config.inflation_rate) ** year
+        inflated_need = annual_income_need * inflation_factor
+        inflated_ss = ss_by_year[year] * inflation_factor
+        withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+
+        combined -= withdrawal
+        if combined <= Decimal("0"):
+            depletion_year = year
+            break
+
+        combined = combined * (Decimal("1") + config.annual_return_rate)
+        combined += contrib_by_year[year]
+        year_balances.append(combined)
+
+    depletion_age = (
+        youngest_age_at_first + depletion_year if depletion_year is not None else None
+    )
+
+    mc_result = None
+    if run_monte_carlo:
+        mc_result = _household_monte_carlo(
+            combined_pool=float(combined_at_first),
+            annual_income_need=float(annual_income_need),
+            contribution_schedule=[float(c) for c in contrib_by_year],
+            ss_schedule=[float(s) for s in ss_by_year],
+            inflation_rate=float(config.inflation_rate),
+            mean_return_rate=float(config.annual_return_rate),
+            max_years=max_years,
+            youngest_age_at_first_retirement=youngest_age_at_first,
+            n_simulations=config.simulation_count,
+            return_stddev=config.return_stddev,
+        )
+
+    return HouseholdProjectionResult(
+        owners=[o.name for o in owners_sorted],
+        first_retirement_date=first_retirement_date,
+        first_retirement_age=first_retiree.retirement_age,
+        combined_portfolio_at_first_retirement=combined_at_first.quantize(Decimal("0.01")),
+        annual_income_need=annual_income_need,
+        annual_ss_income_by_owner=annual_ss,
+        total_annual_ss_income=sum(annual_ss.values(), Decimal("0")),
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,

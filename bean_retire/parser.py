@@ -51,10 +51,10 @@ def parse_retirement_accounts(entries) -> list[RetirementAccount]:
         if not isinstance(entry, Open):
             continue
         meta = entry.meta
-        if "owner" not in meta or "tax-account-type" not in meta:
+        if "account-owner" not in meta or "tax-account-type" not in meta:
             continue
 
-        owner_name = meta["owner"]
+        owner_name = meta["account-owner"]
         tax_type_str = meta["tax-account-type"]
 
         try:
@@ -334,7 +334,7 @@ def parse_ledger(
         if not any(a.owner == owner_name for a in accounts):
             print(
                 f"[bean-retire] owner '{owner_name}' has no retirement accounts tagged with "
-                f"owner: \"{owner_name}\" and tax-account-type metadata",
+                f"account-owner: \"{owner_name}\" and tax-account-type metadata",
                 file=sys.stderr,
             )
 

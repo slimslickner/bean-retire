@@ -8,9 +8,9 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 
-from .models import ProjectionConfig, ProjectionResult
+from .models import HouseholdProjectionResult, Owner, ProjectionConfig, ProjectionResult
 from .parser import parse_ledger
-from .projection import project_owner
+from .projection import project_household, project_owner
 
 console = Console()
 
@@ -76,6 +76,82 @@ def result_to_dict(result: ProjectionResult) -> dict[str, object]:
         "annual_income_need": float(result.annual_income_need),
         "annual_ss_income": float(result.annual_ss_income),
         "annual_portfolio_withdrawal_need": float(result.annual_portfolio_withdrawal_need),
+        "years_to_depletion": result.years_to_depletion,
+        "depletion_age": result.depletion_age,
+        "sustainable": result.years_to_depletion is None,
+        "monte_carlo": None,
+    }
+    if result.monte_carlo_result is not None:
+        mc = result.monte_carlo_result
+        d["monte_carlo"] = {
+            "probability_sustainable": mc.probability_sustainable,
+            "median_depletion_age": mc.median_depletion_age,
+            "p10_depletion_age": mc.p10_depletion_age,
+            "p90_depletion_age": mc.p90_depletion_age,
+        }
+    return d
+
+
+def render_household_result(result: HouseholdProjectionResult, owners: dict[str, Owner]) -> Panel:
+    lines = []
+
+    if result.years_to_depletion is None:
+        outcome_icon = "[green]✓ Sustainable[/green]"
+    else:
+        outcome_icon = f"[red]✗ Depleted at youngest owner age {result.depletion_age}[/red]"
+
+    lines.append("[bold]Retirement timeline:[/bold]")
+    for name in result.owners:
+        o = owners[name]
+        retirement_str = o.retirement_date.strftime("%B %-d, %Y")
+        lines.append(f"  {name.title()}:  {retirement_str} (age {o.retirement_age})")
+    lines.append("")
+    lines.append(
+        f"[bold]Combined portfolio at first retirement:[/bold]  "
+        f"{fmt_dollars(result.combined_portfolio_at_first_retirement)}"
+    )
+    lines.append("")
+    lines.append(f"[bold]Annual household spending need:[/bold]  {fmt_dollars(result.annual_income_need)}")
+    lines.append("[bold]Social Security:[/bold]")
+    for name in result.owners:
+        o = owners[name]
+        ss_amount = result.annual_ss_income_by_owner[name]
+        lines.append(f"  {name.title()}:  {fmt_dollars(ss_amount)}/yr  (starting age {o.social_security_age})")
+    lines.append("")
+    lines.append(f"[bold]Outcome:[/bold]  {outcome_icon}")
+
+    if result.monte_carlo_result is not None:
+        mc = result.monte_carlo_result
+        lines.append("")
+        lines.append(f"[bold]Monte Carlo ({result.simulation_count:,} simulations):[/bold]")
+        lines.append(f"  Probability sustainable:        {fmt_pct(mc.probability_sustainable)}")
+        if mc.median_depletion_age is not None:
+            lines.append(f"  Median depletion age:           {mc.median_depletion_age}")
+        if mc.p10_depletion_age is not None:
+            lines.append(f"  10th / 90th percentile age:     {mc.p10_depletion_age} / {mc.p90_depletion_age}")
+
+    return Panel(
+        "\n".join(lines),
+        title="[bold cyan]Household[/bold cyan]",
+        expand=False,
+    )
+
+
+def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str, Owner]) -> dict[str, object]:
+    d: dict[str, object] = {
+        "owners": result.owners,
+        "first_retirement_date": result.first_retirement_date.isoformat(),
+        "first_retirement_age": result.first_retirement_age,
+        "combined_portfolio_at_first_retirement": float(result.combined_portfolio_at_first_retirement),
+        "annual_income_need": float(result.annual_income_need),
+        "ss_income_by_owner": {
+            name: {
+                "annual_amount": float(result.annual_ss_income_by_owner[name]),
+                "social_security_age": owners[name].social_security_age,
+            }
+            for name in result.owners
+        },
+        "total_annual_ss_income": float(result.total_annual_ss_income),
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
@@ -159,19 +235,31 @@ def main(
         console.print("[red]No owner directives found in ledger.[/red]")
         sys.exit(1)
 
-    # Filter owners if requested
-    target_owners = {k: v for k, v in owners.items() if owner is None or k == owner}
-    if not target_owners:
+    # Apply retirement-age override and validate --owner filter
+    if owner is not None and owner not in owners:
         console.print(f"[red]Owner '{owner}' not found. Available: {', '.join(owners)}[/red]")
         sys.exit(1)
 
-    results = []
-    for owner_obj in target_owners.values():
-        if retirement_age_override is not None:
-            owner_obj = replace(owner_obj, retirement_age=retirement_age_override)
+    all_owners = {
+        name: (replace(o, retirement_age=retirement_age_override) if retirement_age_override is not None else o)
+        for name, o in owners.items()
+    }
 
-        result = project_owner(
-            owner=owner_obj,
+    config_dict: dict[str, object] = {
+        "spending_ratio": spending_ratio,
+        "annual_return_rate": return_rate,
+        "inflation_rate": inflation_rate,
+    }
+    spending_dict: dict[str, object] = {
+        "annual_amount": float(spending.annual_amount),
+        "years_averaged": spending.years_averaged,
+        "inflation_adjusted": spending.inflation_adjusted,
+    }
+
+    if owner is not None:
+        # Per-owner mode: single owner projected against the full household spending baseline
+        per_owner_result = project_owner(
+            owner=all_owners[owner],
             accounts=accounts,
             contributions=contributions,
             spending=spending,
@@ -179,28 +267,42 @@ def main(
             today=reference_date,
             run_monte_carlo=monte_carlo,
         )
-        results.append(result)
-
-    if output_json:
-        output = {
-            "schema_version": "1.0",
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "ledger_file": ledger_file,
-            "config": {
-                "spending_ratio": spending_ratio,
-                "annual_return_rate": return_rate,
-                "inflation_rate": inflation_rate,
-            },
-            "spending_baseline": {
-                "annual_amount": float(spending.annual_amount),
-                "years_averaged": spending.years_averaged,
-                "inflation_adjusted": spending.inflation_adjusted,
-            },
-            "projections": [result_to_dict(r) for r in results],
-        }
-        click.echo(json_module.dumps(output, indent=2))
+        if output_json:
+            click.echo(json_module.dumps({
+                "schema_version": "1.1",
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "ledger_file": ledger_file,
+                "mode": "per_owner",
+                "config": config_dict,
+                "spending_baseline": spending_dict,
+                "projections": [result_to_dict(per_owner_result)],
+            }, indent=2))
+        else:
+            console.print()
+            console.print(render_result(per_owner_result))
+            console.print()
     else:
-        console.print()
-        for result in results:
-            console.print(render_result(result))
+        # Household mode (default): all owners, spending counted once
+        household = project_household(
+            owners=list(all_owners.values()),
+            accounts=accounts,
+            contributions=contributions,
+            spending=spending,
+            config=config,
+            today=reference_date,
+            run_monte_carlo=monte_carlo,
+        )
+        if output_json:
+            click.echo(json_module.dumps({
+                "schema_version": "1.1",
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "ledger_file": ledger_file,
+                "mode": "household",
+                "config": config_dict,
+                "spending_baseline": spending_dict,
+                "household": household_result_to_dict(household, all_owners),
+            }, indent=2))
+        else:
+            console.print()
+            console.print(render_household_result(household, all_owners))
             console.print()

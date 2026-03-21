@@ -15,7 +15,7 @@ option "operating_currency" "USD"
 ; aggregates their balances and contributions automatically.
 
 2020-01-01 open Assets:Retirement:My401k
-  owner: "person1"
+  account-owner: "person1"
   tax-account-type: "traditional"
 
 2020-01-01 open Assets:Retirement:My401k:Cash  USD

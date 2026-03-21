@@ -93,3 +93,19 @@ class ProjectionResult:
     fixed_rate_balances: list[Decimal]  # year-by-year portfolio balances
     simulation_count: int = 0           # n_simulations used; 0 if MC not run
     monte_carlo_result: Optional[MonteCarloResult] = None
+
+
+@dataclass
+class HouseholdProjectionResult:
+    owners: list[str]                             # owner names, first retiree first
+    first_retirement_date: date
+    first_retirement_age: int                     # retirement age of first retiree
+    combined_portfolio_at_first_retirement: Decimal
+    annual_income_need: Decimal                   # spending_baseline * spending_ratio
+    annual_ss_income_by_owner: dict[str, Decimal] # nominal annual SS per owner name
+    total_annual_ss_income: Decimal               # sum when all owners collecting
+    years_to_depletion: Optional[int]             # from first retirement; None = sustainable
+    depletion_age: Optional[int]                  # youngest owner's age at depletion
+    fixed_rate_balances: list[Decimal]
+    simulation_count: int = 0
+    monte_carlo_result: Optional[MonteCarloResult] = None
