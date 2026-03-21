@@ -78,6 +78,49 @@ Valid `tax-account-type` values:
 
 For `split` accounts, percentages must sum to 100.
 
+#### Commodity sub-accounts (one account per fund)
+
+Many Beancount users model a 401k or brokerage as a parent account with one child account per fund or commodity:
+
+```
+Assets:Investment:Retirement:CapTech-Capital-Group-401k
+Assets:Investment:Retirement:CapTech-Capital-Group-401k:Cash
+Assets:Investment:Retirement:CapTech-Capital-Group-401k:RBFGX
+Assets:Investment:Retirement:CapTech-Capital-Group-401k:VFIAX
+Assets:Investment:Retirement:CapTech-Capital-Group-401k:VTMGX
+```
+
+**Only the parent account needs metadata.** Sub-accounts require no `owner` or `tax-account-type` — bean-retire aggregates them automatically.
+
+```beancount
+; Tag the parent with metadata
+2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k
+  owner: "person1"
+  tax-account-type: "traditional"
+
+; Sub-accounts: no metadata needed
+2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k:Cash  USD
+2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k:RBFGX RBFGX
+2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k:VFIAX VFIAX
+2020-01-01 open Assets:Investment:Retirement:CapTech-Capital-Group-401k:VTMGX VTMGX
+```
+
+**Balance**: bean-retire walks the full sub-account tree and converts each position to USD. It uses the most recent `price` directive on or before the reference date; if no price is available, it falls back to the cost basis recorded in the transaction.
+
+**Contributions**: any positive posting to a sub-account (e.g. purchasing fund shares) is attributed to the parent tagged account and valued at cost basis (`units × cost-per-unit`). Add `price` directives to your ledger to keep balance valuations current — they do not affect contribution accounting.
+
+```beancount
+; Prices used for balance valuation (update periodically)
+2025-01-01 price VFIAX 125.00 USD
+2025-01-01 price VTMGX  62.00 USD
+
+; Contribution recorded as a fund share purchase — valued at cost basis
+2025-06-15 * "401k contribution"
+  Assets:Investment:Retirement:CapTech-Capital-Group-401k:VFIAX  10 VFIAX {125.00 USD}
+  Assets:Investment:Retirement:CapTech-Capital-Group-401k:VTMGX  20 VTMGX {62.00 USD}
+  Income:Salary:Gross                                          -2490.00 USD
+```
+
 ### 3. Expense accounts (no setup needed)
 
 bean-retire derives the spending baseline automatically from your `Expenses:*` postings over the trailing 3 years. No additional configuration is required.

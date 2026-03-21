@@ -8,6 +8,7 @@ from bean_retire.models import TaxType
 from bean_retire.parser import parse_ledger
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.beancount"
+COMMODITY_FIXTURE = Path(__file__).parent / "fixtures" / "sample_commodity.beancount"
 TODAY = date(2026, 3, 20)
 
 
@@ -138,3 +139,60 @@ def test_person1s_roth_contributions(ledger):
 def test_person2s_403b_contributions(ledger):
     contrib = ledger["contributions"]["Assets:Investment:Retirement:Person2s-403b"]
     assert contrib == Decimal("10000.00")
+
+
+# ─── Commodity sub-account fixture ────────────────────────────────────────────
+# Tests that bean-retire correctly handles the pattern where a financial
+# institution account (e.g. a 401k) is modelled as a parent account with one
+# Beancount sub-account per mutual fund:
+#
+#   Assets:Retirement:My401k              <- tagged with owner + tax-account-type
+#   Assets:Retirement:My401k:Cash  USD    <- cash sweep (USD)
+#   Assets:Retirement:My401k:VFIAX VFIAX  <- fund shares (non-USD)
+#   Assets:Retirement:My401k:VTMGX VTMGX  <- fund shares (non-USD)
+#
+# Only the parent Open directive carries metadata; sub-accounts are aggregated
+# automatically. Non-USD contributions are valued at cost basis.
+
+@pytest.fixture(scope="module")
+def commodity_ledger():
+    return parse_ledger(str(COMMODITY_FIXTURE), today=TODAY)
+
+
+def test_commodity_one_retirement_account(commodity_ledger):
+    """Parent account is returned; sub-accounts (no metadata) are not."""
+    assert len(commodity_ledger["accounts"]) == 1
+
+
+def test_commodity_account_metadata(commodity_ledger):
+    acct = commodity_ledger["accounts"][0]
+    assert acct.account_name == "Assets:Retirement:My401k"
+    assert acct.owner == "person1"
+    assert acct.tax_type == TaxType.TRADITIONAL
+
+
+def test_commodity_balance_aggregates_sub_accounts(commodity_ledger):
+    # After all transactions (prices as of 2026-03-20, using 2025-01-01 prices):
+    #   VFIAX: (500 + 100 + 100) shares × $125.00 =  $87,500
+    #   VTMGX: (1000 + 200 + 200) shares × $62.00  =  $86,800
+    #   Cash:                                        $  10,000
+    #   Total:                                       $184,300
+    acct = commodity_ledger["accounts"][0]
+    assert acct.current_balance == Decimal("184300")
+
+
+def test_commodity_contributions_valued_at_cost_basis(commodity_ledger):
+    # 2-year window cutoff: 2024-03-20 — captures 2024-06-15 and 2025-06-15.
+    # 2024: 100 VFIAX × $120 + 200 VTMGX × $60 = $12,000 + $12,000 = $24,000
+    # 2025: 100 VFIAX × $125 + 200 VTMGX × $62 = $12,500 + $12,400 = $24,900
+    # Annualized: ($24,000 + $24,900) / 2 = $24,450
+    contrib = commodity_ledger["contributions"]["Assets:Retirement:My401k"]
+    assert contrib == Decimal("24450.00")
+
+
+def test_commodity_sub_accounts_not_in_contributions(commodity_ledger):
+    """Sub-account names must not appear as contribution keys; only the parent does."""
+    keys = set(commodity_ledger["contributions"].keys())
+    assert "Assets:Retirement:My401k:VFIAX" not in keys
+    assert "Assets:Retirement:My401k:VTMGX" not in keys
+    assert "Assets:Retirement:My401k:Cash" not in keys

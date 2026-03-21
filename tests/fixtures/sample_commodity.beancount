@@ -1,0 +1,78 @@
+option "title" "Bean-Retire Commodity Sub-Account Fixture"
+option "operating_currency" "USD"
+
+; ─── Owner directives ─────────────────────────────────────────────────────────
+
+2020-01-01 custom "owner" "person1"
+  birth-date: "1985-03-15"
+  retirement-age: "57"
+  social-security-age: "67"
+  social-security-estimate: "2400"
+
+; ─── Accounts ─────────────────────────────────────────────────────────────────
+; Only the PARENT account carries the bean-retire metadata.
+; Sub-accounts (one per fund/commodity) require no metadata — bean-retire
+; aggregates their balances and contributions automatically.
+
+2020-01-01 open Assets:Retirement:My401k
+  owner: "person1"
+  tax-account-type: "traditional"
+
+2020-01-01 open Assets:Retirement:My401k:Cash  USD
+2020-01-01 open Assets:Retirement:My401k:VFIAX VFIAX
+2020-01-01 open Assets:Retirement:My401k:VTMGX VTMGX
+
+2020-01-01 open Equity:Stub
+2020-01-01 open Expenses:Housing USD
+
+; ─── Price history ─────────────────────────────────────────────────────────────
+; Used for balance valuation. bean-retire picks the most recent price on or
+; before the reference date (today / --as-of-date). If no price is available,
+; cost basis is used as a fallback.
+
+2025-01-01 price VFIAX 125.00 USD
+2025-01-01 price VTMGX  62.00 USD
+
+; ─── Opening balances ──────────────────────────────────────────────────────────
+; 500 VFIAX @ $100 = $50,000
+; 1000 VTMGX @ $50 = $50,000
+; Cash = $10,000
+; Total opening: $110,000
+
+2020-01-01 * "Opening balances"
+  Assets:Retirement:My401k:VFIAX    500 VFIAX {100.00 USD}
+  Assets:Retirement:My401k:VTMGX   1000 VTMGX {50.00 USD}
+  Assets:Retirement:My401k:Cash   10000.00 USD
+  Equity:Stub                    -110000.00 USD
+
+; ─── Annual contributions ──────────────────────────────────────────────────────
+; Contributions are purchases of fund shares recorded at cost. bean-retire
+; converts these to USD using the cost basis (units × cost-per-unit) and
+; attributes them to the parent tagged account.
+
+; 2024: 100 VFIAX @ $120 + 200 VTMGX @ $60 = $12,000 + $12,000 = $24,000
+2024-06-15 * "2024 contributions"
+  Assets:Retirement:My401k:VFIAX  100 VFIAX {120.00 USD}
+  Assets:Retirement:My401k:VTMGX  200 VTMGX {60.00 USD}
+  Equity:Stub                   -24000.00 USD
+
+; 2025: 100 VFIAX @ $125 + 200 VTMGX @ $62 = $12,500 + $12,400 = $24,900
+2025-06-15 * "2025 contributions"
+  Assets:Retirement:My401k:VFIAX  100 VFIAX {125.00 USD}
+  Assets:Retirement:My401k:VTMGX  200 VTMGX {62.00 USD}
+  Equity:Stub                   -24900.00 USD
+
+; ─── Annual expenses ──────────────────────────────────────────────────────────
+; $42,000/yr — needed so compute_spending_baseline returns a non-zero value.
+
+2023-06-30 * "2023 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD
+
+2024-06-30 * "2024 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD
+
+2025-06-30 * "2025 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD

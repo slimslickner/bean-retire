@@ -108,6 +108,52 @@ def parse_retirement_accounts(entries) -> list[RetirementAccount]:
     return accounts
 
 
+def _sum_subtree_balance(
+    real_account,
+    price_map,
+    as_of_date: Optional[date],
+) -> Decimal:
+    """
+    Recursively sum the USD value of all positions in real_account and every
+    descendant node in the realization tree.
+
+    This handles the common Beancount pattern where a 401k or brokerage account
+    is split into one sub-account per fund:
+
+        Assets:Investment:Retirement:My401k           <- tagged with owner metadata
+        Assets:Investment:Retirement:My401k:Cash      <- USD cash sweep
+        Assets:Investment:Retirement:My401k:VFIAX     <- mutual fund shares
+        Assets:Investment:Retirement:My401k:VTMGX     <- mutual fund shares
+
+    Tagging only the parent account with ``owner`` / ``tax-account-type`` is
+    sufficient; all descendant balances are rolled up automatically.
+
+    Non-USD positions are converted using the price map (most recent price on or
+    before as_of_date). If no price entry is available, the per-unit cost basis
+    recorded in the transaction is used as a fallback. Positions with neither a
+    price nor a cost basis are excluded.
+    """
+    usd_total = Decimal("0")
+    for pos in real_account.balance:
+        if pos.units.currency == "USD":
+            usd_total += pos.units.number
+        elif price_map is not None:
+            _, price = beancount_prices.get_price(
+                price_map, (pos.units.currency, "USD"), as_of_date
+            )
+            if price is not None:
+                usd_total += pos.units.number * price
+            elif pos.cost is not None:
+                usd_total += pos.units.number * pos.cost.number
+        elif pos.cost is not None:
+            usd_total += pos.units.number * pos.cost.number
+
+    for child in real_account.values():
+        usd_total += _sum_subtree_balance(child, price_map, as_of_date)
+
+    return usd_total
+
+
 def compute_account_balances(
     entries,
     accounts: list[RetirementAccount],
@@ -116,7 +162,11 @@ def compute_account_balances(
 ) -> list[RetirementAccount]:
     """
     Compute USD balance for each retirement account using beancount's realization.
-    Non-USD positions are converted via the price map; falls back to cost basis.
+
+    If the tagged account has commodity sub-accounts (e.g. one child account per
+    mutual fund), their balances are included via recursive subtree aggregation —
+    see _sum_subtree_balance. Non-USD positions are converted via the price map;
+    cost basis is used as a fallback when no price entry is available.
     """
     real_root = realization.realize(entries)
 
@@ -124,23 +174,7 @@ def compute_account_balances(
         real_account = realization.get(real_root, account.account_name)
         if real_account is None:
             continue
-
-        usd_total = Decimal("0")
-        for pos in real_account.balance:
-            if pos.units.currency == "USD":
-                usd_total += pos.units.number
-            elif price_map is not None:
-                _, price = beancount_prices.get_price(
-                    price_map, (pos.units.currency, "USD"), as_of_date
-                )
-                if price is not None:
-                    usd_total += pos.units.number * price
-                elif pos.cost is not None:
-                    usd_total += pos.units.number * pos.cost.number
-            elif pos.cost is not None:
-                usd_total += pos.units.number * pos.cost.number
-
-        account.current_balance = usd_total
+        account.current_balance = _sum_subtree_balance(real_account, price_map, as_of_date)
 
     return accounts
 
@@ -206,7 +240,22 @@ def compute_annual_contributions(
     years: int = 2,
     today: Optional[date] = None,
 ) -> dict[str, Decimal]:
-    """Annualized contributions per account over the trailing N-year window."""
+    """
+    Annualized contributions per account over the trailing N-year window.
+
+    A "contribution" is any positive posting to a tagged account or any of its
+    sub-accounts. Sub-account postings are attributed to the nearest tagged
+    ancestor. This handles the common pattern where each fund position is held
+    in its own child account:
+
+        Assets:Investment:Retirement:My401k:VFIAX  100 VFIAX {120.00 USD}
+
+    is counted as a $12,000 contribution to ``Assets:Investment:Retirement:My401k``.
+
+    Non-USD postings are valued at their cost basis (units × cost-per-unit in
+    USD). Postings with no USD cost basis are skipped — there is no reliable way
+    to determine their USD value without a price directive.
+    """
     if today is None:
         today = date.today()
 
@@ -220,12 +269,29 @@ def compute_annual_contributions(
             continue
 
         for posting in entry.postings:
-            if posting.account not in account_names:
+            # Match posting to a tagged account (exact) or tagged ancestor (prefix)
+            matched_account = None
+            if posting.account in account_names:
+                matched_account = posting.account
+            else:
+                for name in account_names:
+                    if posting.account.startswith(name + ":"):
+                        matched_account = name
+                        break
+            if matched_account is None:
                 continue
-            if posting.units.currency != "USD":
-                continue
-            if posting.units.number > 0:
-                totals[posting.account] = totals[posting.account] + posting.units.number
+
+            # Determine USD value of the posting
+            if posting.units.currency == "USD":
+                usd_amount = posting.units.number
+            elif posting.cost is not None and posting.cost.currency == "USD":
+                # Non-USD posting (e.g. fund shares bought at cost): use cost basis
+                usd_amount = posting.units.number * posting.cost.number
+            else:
+                continue  # No USD value determinable; skip
+
+            if usd_amount > 0:
+                totals[matched_account] = totals[matched_account] + usd_amount
 
     annualized = {}
     for account, total in totals.items():

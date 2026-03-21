@@ -95,18 +95,23 @@ def test_drawdown_depletes_small_portfolio():
 
 
 def test_drawdown_ss_income_delays_depletion():
-    kwargs = dict(
+    _, depletion_no_ss = drawdown(
         portfolio=Decimal("400000"),
         annual_income_need=Decimal("60000"),
+        ss_annual_income=Decimal("0"),
+        ss_start_year=0,
         inflation_rate=Decimal("0.03"),
         return_rate=Decimal("0.05"),
         max_years=43,
     )
-    _, depletion_no_ss = drawdown(
-        ss_annual_income=Decimal("0"), ss_start_year=0, **kwargs
-    )
     _, depletion_with_ss = drawdown(
-        ss_annual_income=Decimal("28800"), ss_start_year=0, **kwargs
+        portfolio=Decimal("400000"),
+        annual_income_need=Decimal("60000"),
+        ss_annual_income=Decimal("28800"),
+        ss_start_year=0,
+        inflation_rate=Decimal("0.03"),
+        return_rate=Decimal("0.05"),
+        max_years=43,
     )
 
     # With SS income, portfolio lasts longer (or is sustainable when it wasn't)
