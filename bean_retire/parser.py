@@ -238,6 +238,11 @@ def compute_spending_baseline(
     )
 
 
+def _in_retirement_tree(account: str, account_names: set[str]) -> bool:
+    """Return True if account is a tagged parent or a sub-account of one."""
+    return account in account_names or any(account.startswith(n + ":") for n in account_names)
+
+
 def compute_annual_contributions(
     entries,
     account_names: set[str],
@@ -248,13 +253,24 @@ def compute_annual_contributions(
     Annualized contributions per account over the trailing N-year window.
 
     A "contribution" is any positive posting to a tagged account or any of its
-    sub-accounts. Sub-account postings are attributed to the nearest tagged
-    ancestor. This handles the common pattern where each fund position is held
-    in its own child account:
+    sub-accounts that originates from outside the retirement account tree
+    (i.e. from income, a checking account, or an employer match). Purely
+    intra-account transactions — such as purchasing fund shares with cash
+    already held in the parent account — are excluded to avoid double-counting.
 
-        Assets:Investment:Retirement:My401k:VFIAX  100 VFIAX {120.00 USD}
+    Common patterns both handled correctly:
 
-    is counted as a $12,000 contribution to ``Assets:Investment:Retirement:My401k``.
+    Pattern A — direct fund purchase from income (one transaction):
+        Assets:Retirement:My401k:VFIAX  100 VFIAX {120.00 USD}
+        Income:Salary:Gross            -12000.00 USD
+    → $12,000 counted (Income is external to the retirement tree)
+
+    Pattern B — deposit to parent then buy funds (two transactions):
+        Tx 1: Assets:Retirement:My401k  12000 USD   (from income — external)
+              Income:Salary:Gross       -12000 USD
+        Tx 2: Assets:Retirement:My401k:VFIAX  100 VFIAX {120.00 USD}
+              Assets:Retirement:My401k        -12000 USD   (internal only)
+    → $12,000 counted once (Tx1), Tx2 skipped (all postings within tree)
 
     Non-USD postings are valued at their cost basis (units × cost-per-unit in
     USD). Postings with no USD cost basis are skipped — there is no reliable way
@@ -270,6 +286,12 @@ def compute_annual_contributions(
         if not isinstance(entry, Transaction):
             continue
         if entry.date < cutoff or entry.date >= today:
+            continue
+
+        # Skip purely intra-account transactions (fund purchases funded by cash
+        # already inside the retirement account tree). These are internal
+        # transfers/rebalancing and do not represent new external contributions.
+        if all(_in_retirement_tree(p.account, account_names) for p in entry.postings):
             continue
 
         for posting in entry.postings:

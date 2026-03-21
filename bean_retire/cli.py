@@ -137,6 +137,7 @@ def result_to_dict(result: ProjectionResult) -> dict[str, object]:
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
+        "accumulation": detail_rows_to_list(result.accumulation_rows),
         "detail": detail_rows_to_list(result.detail_rows),
         "monte_carlo": None,
     }
@@ -359,10 +360,16 @@ def main(
             console.print()
             console.print(render_result(per_owner_result))
             if show_detail:
+                if per_owner_result.accumulation_rows:
+                    console.print()
+                    console.print(render_detail_table(
+                        per_owner_result.accumulation_rows,
+                        title=f"{owner.title()} — Accumulation (today → retirement)",
+                    ))
                 console.print()
                 console.print(render_detail_table(
                     per_owner_result.detail_rows,
-                    title=f"{owner.title()} — Year-by-Year Drawdown",
+                    title=f"{owner.title()} — Drawdown (retirement → age 100)",
                 ))
             console.print()
     else:
@@ -386,6 +393,7 @@ def main(
                 "spending_baseline": spending_dict,
                 "household": {
                     **household_result_to_dict(household, all_owners),
+                    "accumulation": detail_rows_to_list(household.accumulation_rows),
                     "detail": detail_rows_to_list(household.detail_rows),
                 },
             }, indent=2))
@@ -393,9 +401,15 @@ def main(
             console.print()
             console.print(render_household_result(household, all_owners))
             if show_detail:
+                if household.accumulation_rows:
+                    console.print()
+                    console.print(render_detail_table(
+                        household.accumulation_rows,
+                        title="Household — Accumulation (today → first retirement)",
+                    ))
                 console.print()
                 console.print(render_detail_table(
                     household.detail_rows,
-                    title="Household — Year-by-Year Drawdown",
+                    title="Household — Drawdown (first retirement → youngest age 100)",
                 ))
             console.print()

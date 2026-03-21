@@ -1,0 +1,65 @@
+option "title" "Bean-Retire Pattern B Fixture — deposit to parent, then buy funds"
+option "operating_currency" "USD"
+
+; Pattern B: paycheck deposits USD to the parent account, then a separate
+; transaction buys fund shares using that USD. bean-retire must count the
+; contribution only ONCE (from the paycheck transaction), not twice.
+
+2020-01-01 custom "owner" "person1"
+  birth-date: "1985-03-15"
+  retirement-age: "57"
+  social-security-age: "67"
+  social-security-estimate: "2400"
+
+2020-01-01 open Assets:Retirement:My401k
+  account-owner: "person1"
+  tax-account-type: "traditional"
+
+2020-01-01 open Assets:Retirement:My401k:Cash  USD
+2020-01-01 open Assets:Retirement:My401k:VFIAX VFIAX
+2020-01-01 open Equity:Stub
+2020-01-01 open Expenses:Housing USD
+2020-01-01 open Income:Salary USD
+
+; ─── Opening balance ───────────────────────────────────────────────────────
+
+2020-01-01 * "Opening balance"
+  Assets:Retirement:My401k:Cash  10000.00 USD
+  Equity:Stub                   -10000.00 USD
+
+; ─── 2024 contributions — Pattern B (two transactions) ────────────────────
+; Step 1: paycheck deposits $20,000 into the parent cash sub-account.
+; Step 2: buy VFIAX with the cash (purely intra-account — must NOT be counted).
+; True annual contribution: $20,000
+
+2024-06-15 * "2024 paycheck 401k deduction"
+  Assets:Retirement:My401k:Cash  20000.00 USD
+  Income:Salary                 -20000.00 USD
+
+2024-06-16 * "2024 invest 401k cash into VFIAX"
+  Assets:Retirement:My401k:VFIAX  160 VFIAX {125.00 USD}
+  Assets:Retirement:My401k:Cash   -20000.00 USD
+
+; ─── 2025 contributions — Pattern B ──────────────────────────────────────
+
+2025-06-15 * "2025 paycheck 401k deduction"
+  Assets:Retirement:My401k:Cash  22000.00 USD
+  Income:Salary                 -22000.00 USD
+
+2025-06-16 * "2025 invest 401k cash into VFIAX"
+  Assets:Retirement:My401k:VFIAX  176 VFIAX {125.00 USD}
+  Assets:Retirement:My401k:Cash   -22000.00 USD
+
+; ─── Expenses ──────────────────────────────────────────────────────────────
+
+2023-06-30 * "2023 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD
+
+2024-06-30 * "2024 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD
+
+2025-06-30 * "2025 expenses"
+  Expenses:Housing  42000.00 USD
+  Equity:Stub      -42000.00 USD

@@ -116,11 +116,14 @@ class ProjectionResult:
     years_to_depletion: Optional[int]          # years from retirement; None if sustainable
     depletion_age: Optional[int]               # retirement_age + years_to_depletion
     fixed_rate_balances: list[Decimal]         # year-by-year portfolio balances
+    accumulation_rows: list[DetailRow] = None  # type: ignore[assignment]
     detail_rows: list[DetailRow] = None        # type: ignore[assignment]
     simulation_count: int = 0                  # n_simulations used; 0 if MC not run
     monte_carlo_result: Optional[MonteCarloResult] = None
 
     def __post_init__(self):
+        if self.accumulation_rows is None:
+            self.accumulation_rows = []
         if self.detail_rows is None:
             self.detail_rows = []
 
@@ -139,10 +142,13 @@ class HouseholdProjectionResult:
     years_to_depletion: Optional[int]                   # from first retirement; None = sustainable
     depletion_age: Optional[int]                        # youngest owner's age at depletion
     fixed_rate_balances: list[Decimal]
+    accumulation_rows: list[DetailRow] = None  # type: ignore[assignment]
     detail_rows: list[DetailRow] = None        # type: ignore[assignment]
     simulation_count: int = 0
     monte_carlo_result: Optional[MonteCarloResult] = None
 
     def __post_init__(self):
+        if self.accumulation_rows is None:
+            self.accumulation_rows = []
         if self.detail_rows is None:
             self.detail_rows = []

@@ -76,6 +76,37 @@ def drawdown(
     return year_balances, None
 
 
+def _accumulation_rows(
+    portfolio: Decimal,
+    annual_contribution: Decimal,
+    years: int,
+    return_rate: Decimal,
+    start_age: int,
+    start_year: int,
+) -> list[DetailRow]:
+    """Compute per-year detail rows for the accumulation phase (today → retirement)."""
+    rows: list[DetailRow] = []
+    for year in range(years):
+        portfolio_start = portfolio
+        growth = portfolio * return_rate
+        portfolio_end = portfolio + growth + annual_contribution
+        rows.append(DetailRow(
+            year_index=year,
+            calendar_year=start_year + year,
+            age=start_age + year,
+            portfolio_start=portfolio_start.quantize(Decimal("0.01")),
+            income_ss=Decimal("0"),
+            income_pension=Decimal("0"),
+            contributions=annual_contribution.quantize(Decimal("0.01")),
+            withdrawal=Decimal("0"),
+            investment_return=growth.quantize(Decimal("0.01")),
+            portfolio_end=portfolio_end.quantize(Decimal("0.01")),
+            life_events=[],
+        ))
+        portfolio = portfolio_end
+    return rows
+
+
 def _owner_detail_rows(
     portfolio: Decimal,
     annual_income_need: Decimal,
@@ -361,6 +392,14 @@ def project_owner(
         owner.retirement_age + depletion_year if depletion_year is not None else None
     )
 
+    accum = _accumulation_rows(
+        portfolio=current_portfolio,
+        annual_contribution=annual_contribution,
+        years=years_to_retirement,
+        return_rate=config.annual_return_rate,
+        start_age=years_between(owner.birth_date, today),
+        start_year=today.year,
+    )
     detail = _owner_detail_rows(
         portfolio=portfolio_at_retirement,
         annual_income_need=annual_income_need,
@@ -407,6 +446,7 @@ def project_owner(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        accumulation_rows=accum,
         detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
         monte_carlo_result=mc_result,
@@ -629,6 +669,35 @@ def project_household(
         youngest_age_at_first + depletion_year if depletion_year is not None else None
     )
 
+    # Accumulation phase: build one row per year per owner, merged into a combined balance.
+    # For simplicity in the household view, show the combined portfolio growing each year.
+    combined_accum_rows: list[DetailRow] = []
+    for year in range(years_to_first):
+        port_start = sum(
+            (
+                accumulate(_balance(o), _contrib(o), year, config.annual_return_rate)
+                for o in owners_sorted
+            ),
+            Decimal("0"),
+        )
+        annual_contrib_total = sum((_contrib(o) for o in owners_sorted), Decimal("0"))
+        growth = port_start * config.annual_return_rate
+        port_end = port_start + growth + annual_contrib_total
+        youngest_age_now = years_between(youngest.birth_date, today) + year
+        combined_accum_rows.append(DetailRow(
+            year_index=year,
+            calendar_year=today.year + year,
+            age=youngest_age_now,
+            portfolio_start=port_start.quantize(Decimal("0.01")),
+            income_ss=Decimal("0"),
+            income_pension=Decimal("0"),
+            contributions=annual_contrib_total.quantize(Decimal("0.01")),
+            withdrawal=Decimal("0"),
+            investment_return=growth.quantize(Decimal("0.01")),
+            portfolio_end=port_end.quantize(Decimal("0.01")),
+            life_events=[],
+        ))
+
     detail = _household_detail_rows(
         combined=combined_at_first,
         annual_income_need=annual_income_need,
@@ -675,6 +744,7 @@ def project_household(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        accumulation_rows=combined_accum_rows,
         detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
         monte_carlo_result=mc_result,

@@ -9,6 +9,7 @@ from bean_retire.parser import parse_ledger
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.beancount"
 COMMODITY_FIXTURE = Path(__file__).parent / "fixtures" / "sample_commodity.beancount"
+PATTERN_B_FIXTURE = Path(__file__).parent / "fixtures" / "sample_pattern_b.beancount"
 TODAY = date(2026, 3, 20)
 
 
@@ -208,3 +209,24 @@ def test_commodity_sub_accounts_not_in_contributions(commodity_ledger):
     assert "Assets:Retirement:My401k:VFIAX" not in keys
     assert "Assets:Retirement:My401k:VTMGX" not in keys
     assert "Assets:Retirement:My401k:Cash" not in keys
+
+
+# ─── Pattern B: deposit to parent then buy funds ──────────────────────────────
+# Verifies that intra-account fund purchases (funded by cash already in the
+# retirement account) are not double-counted as contributions.
+
+@pytest.fixture(scope="module")
+def pattern_b_ledger():
+    return parse_ledger(str(PATTERN_B_FIXTURE), today=TODAY)
+
+
+def test_pattern_b_no_double_counting(pattern_b_ledger):
+    """Fund purchase with pre-existing retirement cash must not be counted twice.
+
+    2024: paycheck deposits $20,000 (external → counted), then buys VFIAX with that
+          cash (intra-account → skipped). True contribution = $20,000.
+    2025: paycheck deposits $22,000, then buys VFIAX. True contribution = $22,000.
+    Annualized over 2 years: ($20,000 + $22,000) / 2 = $21,000.
+    """
+    contrib = pattern_b_ledger["contributions"]["Assets:Retirement:My401k"]
+    assert contrib == Decimal("21000.00")
