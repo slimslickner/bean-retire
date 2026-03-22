@@ -36,6 +36,7 @@ def render_detail_table(
     title: str,
     inflation_rate: Decimal = Decimal("0"),
     base_year: int = 0,
+    show_taxes: bool = False,
 ) -> Table:
     table = Table(title=title, show_lines=False, expand=False)
     table.add_column("Year", justify="right", style="dim")
@@ -44,6 +45,8 @@ def render_detail_table(
     table.add_column("Income (SS+Pension)", justify="right", style="green")
     table.add_column("Contributions", justify="right", style="cyan")
     table.add_column("Withdrawal", justify="right", style="red")
+    if show_taxes:
+        table.add_column("Taxes", justify="right", style="magenta")
     table.add_column("Return", justify="right")
     table.add_column("Portfolio End", justify="right", style="bold")
     table.add_column("Today $", justify="right", style="dim")
@@ -57,18 +60,23 @@ def render_detail_table(
             real_str = fmt_dollars(real)
         else:
             real_str = "[red]depleted[/red]"
-        table.add_row(
+        cells = [
             str(row.calendar_year),
             str(row.age),
             fmt_dollars(row.portfolio_start),
             fmt_dollars(income) if income else "—",
             fmt_dollars(row.contributions) if row.contributions else "—",
             fmt_dollars(row.withdrawal),
+        ]
+        if show_taxes:
+            cells.append(fmt_dollars(row.taxes) if row.taxes else "—")
+        cells += [
             fmt_dollars(row.investment_return),
             fmt_dollars(row.portfolio_end) if row.portfolio_end else "[red]depleted[/red]",
             real_str,
             events,
-        )
+        ]
+        table.add_row(*cells)
 
     return table
 
@@ -88,6 +96,7 @@ def detail_rows_to_list(
             "income_pension": float(r.income_pension),
             "contributions": float(r.contributions),
             "withdrawal": float(r.withdrawal),
+            "taxes": float(r.taxes),
             "investment_return": float(r.investment_return),
             "portfolio_end": float(r.portfolio_end),
             "portfolio_end_real": float(_real_value(r.portfolio_end, r.calendar_year, base_year, inflation_rate)),
@@ -97,7 +106,7 @@ def detail_rows_to_list(
     ]
 
 
-def render_result(result: ProjectionResult, life_expectancy: int = 100) -> Panel:
+def render_result(result: ProjectionResult, life_expectancy: int = 100, tax_rate: Decimal = Decimal("0")) -> Panel:
     lines = []
 
     sustainable = result.years_to_depletion is None
@@ -124,7 +133,12 @@ def render_result(result: ProjectionResult, life_expectancy: int = 100) -> Panel
             f"  (starting age {pension_start_age})"
         )
     withdrawal = fmt_dollars(result.annual_portfolio_withdrawal_need)
-    lines.append(f"[bold]Portfolio withdrawal:[/bold]  {withdrawal}/yr (year 1)")
+    lines.append(f"[bold]Portfolio withdrawal:[/bold]  {withdrawal}/yr (year 1, gross)")
+    if tax_rate > Decimal("0"):
+        lines.append(
+            f"[bold]Tax rate:[/bold]              {fmt_pct(float(tax_rate))}"
+            f"  ({fmt_pct(float(result.traditional_fraction))} of portfolio taxable)"
+        )
     lines.append("")
     lines.append(f"[bold]Outcome:[/bold]  {outcome_icon}")
 
@@ -162,6 +176,7 @@ def result_to_dict(
         "annual_pension_income": float(result.annual_pension_income),
         "years_retirement_to_pension": result.years_retirement_to_pension,
         "annual_portfolio_withdrawal_need": float(result.annual_portfolio_withdrawal_need),
+        "traditional_fraction": float(result.traditional_fraction),
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
@@ -180,7 +195,11 @@ def result_to_dict(
     return d
 
 
-def render_household_result(result: HouseholdProjectionResult, owners: dict[str, Owner]) -> Panel:
+def render_household_result(
+    result: HouseholdProjectionResult,
+    owners: dict[str, Owner],
+    tax_rate: Decimal = Decimal("0"),
+) -> Panel:
     lines = []
 
     if result.years_to_depletion is None:
@@ -212,6 +231,11 @@ def render_household_result(result: HouseholdProjectionResult, owners: dict[str,
             pension_amount = result.annual_pension_income_by_owner[name]
             if pension_amount > Decimal("0") and o.pension_age is not None:
                 lines.append(f"  {name.title()}:  {fmt_dollars(pension_amount)}/yr  (starting age {o.pension_age})")
+    if tax_rate > Decimal("0"):
+        lines.append(
+            f"[bold]Tax rate:[/bold]  {fmt_pct(float(tax_rate))}"
+            f"  ({fmt_pct(float(result.traditional_fraction))} of portfolio taxable)"
+        )
     lines.append("")
     lines.append(f"[bold]Outcome:[/bold]  {outcome_icon}")
 
@@ -255,6 +279,7 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
             for name in result.owners
         },
         "total_annual_pension_income": float(result.total_annual_pension_income),
+        "traditional_fraction": float(result.traditional_fraction),
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
@@ -289,6 +314,8 @@ def household_result_to_dict(result: HouseholdProjectionResult, owners: dict[str
               help="Annual return standard deviation for Monte Carlo simulation.")
 @click.option("--spending-years", default=3, type=int, show_default=True,
               help="Number of trailing years to average for the spending baseline.")
+@click.option("--tax-rate", default=0.0, type=float, show_default=True,
+              help="Marginal income tax rate on traditional/HSA withdrawals (0 = no tax adjustment).")
 @click.option("--monte-carlo", is_flag=True, default=False, help="Run Monte Carlo simulation.")
 @click.option("--simulation-count", default=1000, type=int, show_default=True,
               help="Number of Monte Carlo simulations.")
@@ -306,6 +333,7 @@ def main(
     spending_ratio,
     return_rate,
     inflation_rate,
+    tax_rate,
     life_expectancy,
     return_stddev,
     spending_years,
@@ -338,6 +366,8 @@ def main(
         return_stddev = float(scenarios["return-stddev"])
     if "spending-years" in scenarios:
         spending_years = int(scenarios["spending-years"])
+    if "tax-rate" in scenarios:
+        tax_rate = float(scenarios["tax-rate"])
 
     config = ProjectionConfig(
         spending_ratio=Decimal(str(spending_ratio)),
@@ -346,11 +376,12 @@ def main(
         simulation_count=simulation_count,
         return_stddev=return_stddev,
         life_expectancy=life_expectancy,
+        marginal_tax_rate=Decimal(str(tax_rate)),
     )
 
     reference_date = date.fromisoformat(as_of_date) if as_of_date else None
     base_year = reference_date.year if reference_date else date.today().year
-    data = parse_ledger(ledger_file, spending_years=spending_years, today=reference_date)
+    data = parse_ledger(ledger_file, spending_years=spending_years, inflation_rate=config.inflation_rate, today=reference_date)
     owners = data["owners"]
     accounts = data["accounts"]
     contributions = data["contributions"]
@@ -374,6 +405,7 @@ def main(
         "spending_ratio": spending_ratio,
         "annual_return_rate": return_rate,
         "inflation_rate": inflation_rate,
+        "marginal_tax_rate": tax_rate,
         "life_expectancy": life_expectancy,
         "return_stddev": return_stddev,
         "spending_years": spending_years,
@@ -407,8 +439,11 @@ def main(
             }, indent=2))
         else:
             console.print()
-            console.print(render_result(per_owner_result, life_expectancy=config.life_expectancy))
+            console.print(render_result(
+                per_owner_result, life_expectancy=config.life_expectancy, tax_rate=config.marginal_tax_rate
+            ))
             if show_detail:
+                show_taxes = config.marginal_tax_rate > Decimal("0")
                 if per_owner_result.accumulation_rows:
                     console.print()
                     console.print(render_detail_table(
@@ -423,6 +458,7 @@ def main(
                     title=f"{owner.title()} — Drawdown (retirement → age {config.life_expectancy})",
                     inflation_rate=config.inflation_rate,
                     base_year=base_year,
+                    show_taxes=show_taxes,
                 ))
             console.print()
     else:
@@ -452,8 +488,9 @@ def main(
             }, indent=2))
         else:
             console.print()
-            console.print(render_household_result(household, all_owners))
+            console.print(render_household_result(household, all_owners, tax_rate=config.marginal_tax_rate))
             if show_detail:
+                show_taxes = config.marginal_tax_rate > Decimal("0")
                 if household.accumulation_rows:
                     console.print()
                     console.print(render_detail_table(
@@ -468,5 +505,6 @@ def main(
                     title=f"Household — Drawdown (first retirement → youngest age {config.life_expectancy})",
                     inflation_rate=config.inflation_rate,
                     base_year=base_year,
+                    show_taxes=show_taxes,
                 ))
             console.print()

@@ -137,6 +137,29 @@ bean-retire derives the spending baseline automatically from your `Expenses:*` p
 bean-retire LEDGER_FILE [OPTIONS]
 ```
 
+### CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--owner NAME` | — | Project a single owner independently instead of the full household |
+| `--spending-ratio FLOAT` | `0.80` | Fraction of the spending baseline to target in retirement |
+| `--return-rate FLOAT` | `0.07` | Annual nominal portfolio return rate |
+| `--inflation-rate FLOAT` | `0.03` | Annual inflation rate (used to grow spending need and adjust income) |
+| `--tax-rate FLOAT` | `0.0` | Marginal income tax rate on traditional/HSA withdrawals; 0 disables tax adjustment |
+| `--life-expectancy INT` | `100` | Age to project through (simulation horizon) |
+| `--return-stddev FLOAT` | `0.12` | Annual return standard deviation for Monte Carlo |
+| `--spending-years INT` | `3` | Number of trailing years to average for the spending baseline |
+| `--retirement-age-override INT` | — | Override the retirement age for all owners |
+| `--monte-carlo` | off | Run Monte Carlo simulation |
+| `--simulation-count INT` | `1000` | Number of Monte Carlo simulations |
+| `--detail` | off | Print year-by-year accumulation and drawdown tables |
+| `--json` | off | Output machine-readable JSON instead of Rich panels |
+| `--scenario KEY=VALUE` | — | What-if override; may be repeated (see keys below) |
+| `--as-of-date YYYY-MM-DD` | today | Reference date for spending and contribution windows |
+
+`--scenario` accepts these keys (same names as the flags above, taking precedence over them):
+`spending-ratio`, `return-rate`, `inflation-rate`, `tax-rate`, `retirement-age`, `life-expectancy`, `return-stddev`, `spending-years`
+
 ### Basic
 
 ```bash
@@ -156,6 +179,7 @@ bean-retire ledger.beancount \
   --spending-ratio 0.75 \
   --return-rate 0.06 \
   --inflation-rate 0.025 \
+  --tax-rate 0.22 \
   --life-expectancy 95 \
   --return-stddev 0.15 \
   --spending-years 1 \
@@ -167,10 +191,9 @@ bean-retire ledger.beancount \
 ```bash
 bean-retire ledger.beancount \
   --scenario retirement-age=52 \
-  --scenario spending-ratio=0.70
+  --scenario spending-ratio=0.70 \
+  --scenario tax-rate=0.22
 ```
-
-`--scenario` accepts the same keys as the explicit flags (`spending-ratio`, `return-rate`, `inflation-rate`, `retirement-age`, `life-expectancy`, `return-stddev`, `spending-years`) and takes precedence over them.
 
 ### Year-by-year detail
 
@@ -179,15 +202,35 @@ bean-retire ledger.beancount --detail
 bean-retire ledger.beancount --owner person1 --detail
 ```
 
-Prints a table showing each year of the drawdown phase with columns: calendar year, age, portfolio start, income (SS + pension), contributions from still-working owners, net withdrawal, investment return, portfolio end, and any life events that year (Social Security started, pension started, spouse retired).
+Prints a table for the accumulation phase (today → retirement) and the drawdown phase (retirement → life expectancy). Drawdown columns: calendar year, age, portfolio start, income (SS + pension), contributions from still-working owners, withdrawal (gross, including taxes), taxes paid, investment return, portfolio end, today-dollar value, and life events.
 
-In `--json` mode the detail array is always included — no extra flag needed:
+The Taxes column is only shown when `--tax-rate > 0`.
+
+In `--json` mode the detail arrays are always included — no extra flag needed:
 
 ```bash
 bean-retire ledger.beancount --json | jq '.household.detail[0]'
 ```
 
-Each row has fields: `calendar_year`, `age`, `portfolio_start`, `income_ss`, `income_pension`, `contributions`, `withdrawal`, `investment_return`, `portfolio_end`, `life_events`.
+Each detail row has fields: `calendar_year`, `age`, `portfolio_start`, `income_ss`, `income_pension`, `contributions`, `withdrawal` (gross), `taxes`, `investment_return`, `portfolio_end`, `portfolio_end_real` (inflation-adjusted to today's dollars), `life_events`.
+
+### Tax adjustment on traditional withdrawals
+
+By default no tax adjustment is applied. Pass `--tax-rate` to model the income tax drag on withdrawals from traditional accounts (401k, 403b, traditional IRA) and HSAs used for non-medical expenses:
+
+```bash
+bean-retire ledger.beancount --tax-rate 0.22 --detail
+```
+
+**How it works**: the spending need is treated as a post-tax target. For each year's withdrawal, the net amount needed from the portfolio is grossed up so that after paying tax on the traditional/HSA portion the full spending target is met:
+
+```
+gross_withdrawal = net_need × ((1 − t) + t / (1 − r))
+```
+
+where `t` = fraction of the portfolio in traditional/HSA accounts (computed from your account metadata at today's balances) and `r` = `--tax-rate`. Roth dollars are withdrawn 1-for-1; traditional/HSA dollars are grossed up. The summary panel shows the effective taxable fraction alongside the configured rate.
+
+**Simplifications**: the traditional fraction is held fixed at its value on the projection start date; SS taxation, RMDs, and Roth conversion strategies are not modelled.
 
 ### Monte Carlo
 
@@ -195,7 +238,7 @@ Each row has fields: `calendar_year`, `age`, `portfolio_start`, `income_ss`, `in
 bean-retire ledger.beancount --monte-carlo --simulation-count 2000 --return-stddev 0.15
 ```
 
-Runs N simulations with normally-distributed annual returns (mean = `--return-rate`, stddev = `--return-stddev`, default 12%) and reports probability of portfolio survival to `--life-expectancy`, plus 10th/90th percentile depletion ages.
+Runs N simulations with normally-distributed annual returns (mean = `--return-rate`, stddev = `--return-stddev`) and reports probability of portfolio survival to `--life-expectancy`, plus 10th/90th percentile depletion ages. Tax gross-up (if `--tax-rate > 0`) is applied in every simulation year.
 
 ### Historical ledger
 
@@ -226,7 +269,11 @@ Schema version `1.1`. Stable interface for downstream tools and LLM integration.
   "config": {
     "spending_ratio": 0.8,
     "annual_return_rate": 0.07,
-    "inflation_rate": 0.03
+    "inflation_rate": 0.03,
+    "marginal_tax_rate": 0.0,
+    "life_expectancy": 100,
+    "return_stddev": 0.12,
+    "spending_years": 3
   },
   "spending_baseline": {
     "annual_amount": 44570.78,
@@ -249,6 +296,7 @@ Schema version `1.1`. Stable interface for downstream tools and LLM integration.
       "person2": {"annual_amount": 0.0, "pension_age": null}
     },
     "total_annual_pension_income": 12000.0,
+    "traditional_fraction": 0.65,
     "years_to_depletion": null,
     "depletion_age": null,
     "sustainable": true,
@@ -280,6 +328,7 @@ Schema version `1.1`. Stable interface for downstream tools and LLM integration.
       "annual_pension_income": 12000.0,
       "years_retirement_to_pension": 0,
       "annual_portfolio_withdrawal_need": 23656.62,
+      "traditional_fraction": 0.65,
       "years_to_depletion": null,
       "depletion_age": null,
       "sustainable": true,

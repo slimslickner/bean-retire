@@ -12,7 +12,42 @@ from .models import (
     ProjectionResult,
     RetirementAccount,
     SpendingBaseline,
+    TaxType,
 )
+
+
+def _taxable_fraction(accounts: list[RetirementAccount]) -> Decimal:
+    """Fraction of portfolio subject to ordinary income tax on withdrawal.
+
+    Includes traditional account balances (scaled by traditional_fraction for SPLIT accounts)
+    and HSA balances in full (HSA withdrawals for non-medical expenses after 65 are taxed
+    as ordinary income, identical to a traditional IRA).
+    """
+    total = sum((a.current_balance for a in accounts), Decimal("0"))
+    if total == Decimal("0"):
+        return Decimal("0")
+    taxable = sum(
+        (
+            a.current_balance * a.traditional_fraction
+            + (a.current_balance if a.tax_type == TaxType.HSA else Decimal("0"))
+        )
+        for a in accounts
+    )
+    return (taxable / total).quantize(Decimal("0.0001"))
+
+
+def _gross_up(net_withdrawal: Decimal, traditional_fraction: Decimal, tax_rate: Decimal) -> tuple[Decimal, Decimal]:
+    """Return (gross_withdrawal, taxes) for a net portfolio withdrawal need.
+
+    Roth dollars are withdrawn 1-for-1. Traditional/HSA dollars must be grossed up
+    so that after paying tax at `tax_rate` the net spending need is met.
+    """
+    if tax_rate <= Decimal("0") or traditional_fraction <= Decimal("0"):
+        return net_withdrawal, Decimal("0")
+    gross_multiplier = Decimal("1") - traditional_fraction + traditional_fraction / (Decimal("1") - tax_rate)
+    gross = net_withdrawal * gross_multiplier
+    taxes = gross - net_withdrawal
+    return gross.quantize(Decimal("0.01")), taxes.quantize(Decimal("0.01"))
 
 
 def years_between(d1: date, d2: date) -> int:
@@ -45,6 +80,8 @@ def drawdown(
     max_years: int,
     pension_annual_income: Decimal = Decimal("0"),
     pension_start_year: int = 0,
+    traditional_fraction: Decimal = Decimal("0"),
+    tax_rate: Decimal = Decimal("0"),
 ) -> tuple[list[Decimal], Optional[int]]:
     """
     Simulate annual portfolio drawdown.
@@ -52,6 +89,10 @@ def drawdown(
     Returns (year_end_balances, depletion_year).
     depletion_year is the 0-based year index in which the portfolio is exhausted,
     or None if the portfolio survives all max_years.
+
+    annual_income_need is a post-tax spending target. When traditional_fraction > 0
+    and tax_rate > 0, withdrawals are grossed up so that after paying income tax
+    on the traditional/HSA portion the full net need is met.
     """
     year_balances: list[Decimal] = []
 
@@ -64,9 +105,10 @@ def drawdown(
         pension_income = (
             pension_annual_income * inflation_factor if year >= pension_start_year else Decimal("0")
         )
-        withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
+        net_withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
+        gross_withdrawal, _ = _gross_up(net_withdrawal, traditional_fraction, tax_rate)
 
-        portfolio -= withdrawal
+        portfolio -= gross_withdrawal
         if portfolio <= 0:
             return year_balances, year
 
@@ -99,6 +141,7 @@ def _accumulation_rows(
             income_pension=Decimal("0"),
             contributions=annual_contribution.quantize(Decimal("0.01")),
             withdrawal=Decimal("0"),
+            taxes=Decimal("0"),
             investment_return=growth.quantize(Decimal("0.01")),
             portfolio_end=portfolio_end.quantize(Decimal("0.01")),
             life_events=[],
@@ -119,6 +162,8 @@ def _owner_detail_rows(
     max_years: int,
     retirement_age: int,
     retirement_year: int,    # calendar year of retirement
+    traditional_fraction: Decimal = Decimal("0"),
+    tax_rate: Decimal = Decimal("0"),
 ) -> list[DetailRow]:
     """Compute per-year detail rows for a single-owner projection."""
     rows: list[DetailRow] = []
@@ -131,10 +176,11 @@ def _owner_detail_rows(
         pension_active = year >= pension_start_year
         ss_income = ss_annual_income * inflation_factor if ss_active else Decimal("0")
         pension_income = pension_annual_income * inflation_factor if pension_active else Decimal("0")
-        withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
+        net_withdrawal = max(inflated_need - ss_income - pension_income, Decimal("0"))
+        gross_withdrawal, taxes = _gross_up(net_withdrawal, traditional_fraction, tax_rate)
 
         portfolio_start = portfolio
-        portfolio -= withdrawal
+        portfolio -= gross_withdrawal
         depleted = portfolio <= 0
 
         growth = portfolio * return_rate if not depleted else Decimal("0")
@@ -154,7 +200,8 @@ def _owner_detail_rows(
             income_ss=ss_income.quantize(Decimal("0.01")),
             income_pension=pension_income.quantize(Decimal("0.01")),
             contributions=Decimal("0"),
-            withdrawal=withdrawal.quantize(Decimal("0.01")),
+            withdrawal=gross_withdrawal.quantize(Decimal("0.01")),
+            taxes=taxes.quantize(Decimal("0.01")),
             investment_return=growth.quantize(Decimal("0.01")),
             portfolio_end=portfolio_end.quantize(Decimal("0.01")),
             life_events=life_events,
@@ -183,6 +230,8 @@ def _household_detail_rows(
     years_until_pension: dict[str, int],
     years_until_retired: dict[str, int],
     owner_names: list[str],
+    traditional_fraction: Decimal = Decimal("0"),
+    tax_rate: Decimal = Decimal("0"),
 ) -> list[DetailRow]:
     """Compute per-year detail rows for a household projection."""
     rows: list[DetailRow] = []
@@ -202,10 +251,11 @@ def _household_detail_rows(
             Decimal("0"),
         ) * inflation_factor
 
-        withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+        net_withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+        gross_withdrawal, taxes = _gross_up(net_withdrawal, traditional_fraction, tax_rate)
 
         portfolio_start = combined
-        combined -= withdrawal
+        combined -= gross_withdrawal
         depleted = combined <= Decimal("0")
 
         growth = combined * return_rate if not depleted else Decimal("0")
@@ -229,7 +279,8 @@ def _household_detail_rows(
             income_ss=ss_this_year.quantize(Decimal("0.01")),
             income_pension=pension_this_year.quantize(Decimal("0.01")),
             contributions=contrib.quantize(Decimal("0.01")),
-            withdrawal=withdrawal.quantize(Decimal("0.01")),
+            withdrawal=gross_withdrawal.quantize(Decimal("0.01")),
+            taxes=taxes.quantize(Decimal("0.01")),
             investment_return=growth.quantize(Decimal("0.01")),
             portfolio_end=portfolio_end.quantize(Decimal("0.01")),
             life_events=life_events,
@@ -255,6 +306,8 @@ def monte_carlo(
     return_stddev: float = 0.12,
     pension_annual_income: float = 0.0,
     pension_start_year: int = 0,
+    traditional_fraction: float = 0.0,
+    tax_rate: float = 0.0,
 ) -> MonteCarloResult:
     # return_stddev default kept for direct callers; project_owner passes config.return_stddev
     """
@@ -266,6 +319,11 @@ def monte_carlo(
     need_float = float(annual_income_need)
     ss_float = float(ss_annual_income)
     start_float = float(portfolio)
+    gross_multiplier = (
+        (1 - traditional_fraction) + traditional_fraction / (1 - tax_rate)
+        if tax_rate > 0 and traditional_fraction > 0
+        else 1.0
+    )
 
     depletion_ages: list[Optional[int]] = []
 
@@ -280,7 +338,8 @@ def monte_carlo(
             inflated_need = need_float * inflation_factor
             ss_income = ss_float * inflation_factor if year >= ss_start_year else 0.0
             pension_income = pension_annual_income * inflation_factor if year >= pension_start_year else 0.0
-            withdrawal = max(inflated_need - ss_income - pension_income, 0.0)
+            net_withdrawal = max(inflated_need - ss_income - pension_income, 0.0)
+            withdrawal = net_withdrawal * gross_multiplier
 
             sim_portfolio -= withdrawal
             if sim_portfolio <= 0:
@@ -333,6 +392,7 @@ def project_owner(
     # Sum this owner's accounts
     owner_accounts = [a for a in accounts if a.owner == owner.name]
     current_portfolio = sum((a.current_balance for a in owner_accounts), Decimal("0"))
+    traditional_fraction = _taxable_fraction(owner_accounts)
 
     # Annualized contributions for this owner
     annual_contribution = sum(
@@ -370,10 +430,9 @@ def project_owner(
     # Initial withdrawal need (first year of retirement, accounting for any income already active)
     ss_active_year1 = annual_ss_income if years_retirement_to_ss == 0 else Decimal("0")
     pension_active_year1 = annual_pension_income if years_retirement_to_pension == 0 else Decimal("0")
-    annual_portfolio_withdrawal_need = max(
-        Decimal("0"),
-        annual_income_need - ss_active_year1 - pension_active_year1,
-    )
+    net_withdrawal_year1 = max(Decimal("0"), annual_income_need - ss_active_year1 - pension_active_year1)
+    gross_withdrawal_year1, _ = _gross_up(net_withdrawal_year1, traditional_fraction, config.marginal_tax_rate)
+    annual_portfolio_withdrawal_need = gross_withdrawal_year1
 
     # Fixed-rate drawdown
     year_balances, depletion_year = drawdown(
@@ -386,6 +445,8 @@ def project_owner(
         max_years=max_years_in_retirement,
         pension_annual_income=annual_pension_income,
         pension_start_year=years_retirement_to_pension,
+        traditional_fraction=traditional_fraction,
+        tax_rate=config.marginal_tax_rate,
     )
 
     depletion_age = (
@@ -412,6 +473,8 @@ def project_owner(
         max_years=max_years_in_retirement,
         retirement_age=owner.retirement_age,
         retirement_year=retirement_date.year,
+        traditional_fraction=traditional_fraction,
+        tax_rate=config.marginal_tax_rate,
     )
 
     mc_result = None
@@ -429,6 +492,8 @@ def project_owner(
             return_stddev=config.return_stddev,
             pension_annual_income=float(annual_pension_income),
             pension_start_year=years_retirement_to_pension,
+            traditional_fraction=float(traditional_fraction),
+            tax_rate=float(config.marginal_tax_rate),
         )
 
     return ProjectionResult(
@@ -446,6 +511,7 @@ def project_owner(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        traditional_fraction=traditional_fraction,
         accumulation_rows=accum,
         detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
@@ -464,6 +530,8 @@ def _household_monte_carlo(
     youngest_age_at_first_retirement: int,
     n_simulations: int,
     return_stddev: float,
+    traditional_fraction: float = 0.0,
+    tax_rate: float = 0.0,
 ) -> MonteCarloResult:
     """
     Monte Carlo simulation for household drawdown.
@@ -475,6 +543,11 @@ def _household_monte_carlo(
     depletion_age is expressed as the youngest owner's age, since the youngest
     person determines the simulation horizon (lives longest).
     """
+    gross_multiplier = (
+        (1 - traditional_fraction) + traditional_fraction / (1 - tax_rate)
+        if tax_rate > 0 and traditional_fraction > 0
+        else 1.0
+    )
     depletion_ages: list[Optional[int]] = []
 
     for _ in range(n_simulations):
@@ -486,7 +559,8 @@ def _household_monte_carlo(
             inflation_factor = (1 + inflation_rate) ** year
             inflated_need = annual_income_need * inflation_factor
             inflated_ss = ss_schedule[year] * inflation_factor
-            withdrawal = max(inflated_need - inflated_ss, 0.0)
+            net_withdrawal = max(inflated_need - inflated_ss, 0.0)
+            withdrawal = net_withdrawal * gross_multiplier
 
             sim_portfolio -= withdrawal
             if sim_portfolio <= 0:
@@ -584,6 +658,7 @@ def project_household(
         for o in owners_sorted
     }
     combined_at_first = sum(portfolios_at_first.values(), Decimal("0"))
+    traditional_fraction = _taxable_fraction(accounts)
 
     annual_income_need = (spending.annual_amount * config.spending_ratio).quantize(Decimal("0.01"))
     annual_ss: dict[str, Decimal] = {
@@ -654,9 +729,10 @@ def project_household(
         inflation_factor = (Decimal("1") + config.inflation_rate) ** year
         inflated_need = annual_income_need * inflation_factor
         inflated_ss = ss_by_year[year] * inflation_factor
-        withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+        net_withdrawal = max(inflated_need - inflated_ss, Decimal("0"))
+        gross_withdrawal, _ = _gross_up(net_withdrawal, traditional_fraction, config.marginal_tax_rate)
 
-        combined -= withdrawal
+        combined -= gross_withdrawal
         if combined <= Decimal("0"):
             depletion_year = year
             break
@@ -693,6 +769,7 @@ def project_household(
             income_pension=Decimal("0"),
             contributions=annual_contrib_total.quantize(Decimal("0.01")),
             withdrawal=Decimal("0"),
+            taxes=Decimal("0"),
             investment_return=growth.quantize(Decimal("0.01")),
             portfolio_end=port_end.quantize(Decimal("0.01")),
             life_events=[],
@@ -714,6 +791,8 @@ def project_household(
         years_until_pension=years_until_pension,
         years_until_retired=years_until_retired,
         owner_names=[o.name for o in owners_sorted],
+        traditional_fraction=traditional_fraction,
+        tax_rate=config.marginal_tax_rate,
     )
 
     mc_result = None
@@ -729,6 +808,8 @@ def project_household(
             youngest_age_at_first_retirement=youngest_age_at_first,
             n_simulations=config.simulation_count,
             return_stddev=config.return_stddev,
+            traditional_fraction=float(traditional_fraction),
+            tax_rate=float(config.marginal_tax_rate),
         )
 
     return HouseholdProjectionResult(
@@ -744,6 +825,7 @@ def project_household(
         years_to_depletion=depletion_year,
         depletion_age=depletion_age,
         fixed_rate_balances=year_balances,
+        traditional_fraction=traditional_fraction,
         accumulation_rows=combined_accum_rows,
         detail_rows=detail,
         simulation_count=config.simulation_count if run_monte_carlo else 0,
