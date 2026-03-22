@@ -24,7 +24,19 @@ def fmt_pct(rate: float) -> str:
     return f"{rate:.1%}"
 
 
-def render_detail_table(rows: list[DetailRow], title: str) -> Table:
+def _real_value(nominal: Decimal, calendar_year: int, base_year: int, inflation_rate: Decimal) -> Decimal:
+    years = calendar_year - base_year
+    if years <= 0:
+        return nominal
+    return nominal / (Decimal("1") + inflation_rate) ** years
+
+
+def render_detail_table(
+    rows: list[DetailRow],
+    title: str,
+    inflation_rate: Decimal = Decimal("0"),
+    base_year: int = 0,
+) -> Table:
     table = Table(title=title, show_lines=False, expand=False)
     table.add_column("Year", justify="right", style="dim")
     table.add_column("Age", justify="right")
@@ -34,11 +46,17 @@ def render_detail_table(rows: list[DetailRow], title: str) -> Table:
     table.add_column("Withdrawal", justify="right", style="red")
     table.add_column("Return", justify="right")
     table.add_column("Portfolio End", justify="right", style="bold")
+    table.add_column("Today $", justify="right", style="dim")
     table.add_column("Events", style="yellow")
 
     for row in rows:
         income = row.income_ss + row.income_pension
         events = ", ".join(row.life_events)
+        if row.portfolio_end:
+            real = _real_value(row.portfolio_end, row.calendar_year, base_year, inflation_rate)
+            real_str = fmt_dollars(real)
+        else:
+            real_str = "[red]depleted[/red]"
         table.add_row(
             str(row.calendar_year),
             str(row.age),
@@ -48,13 +66,18 @@ def render_detail_table(rows: list[DetailRow], title: str) -> Table:
             fmt_dollars(row.withdrawal),
             fmt_dollars(row.investment_return),
             fmt_dollars(row.portfolio_end) if row.portfolio_end else "[red]depleted[/red]",
+            real_str,
             events,
         )
 
     return table
 
 
-def detail_rows_to_list(rows: list[DetailRow]) -> list[dict]:
+def detail_rows_to_list(
+    rows: list[DetailRow],
+    inflation_rate: Decimal = Decimal("0"),
+    base_year: int = 0,
+) -> list[dict]:
     return [
         {
             "year_index": r.year_index,
@@ -67,6 +90,7 @@ def detail_rows_to_list(rows: list[DetailRow]) -> list[dict]:
             "withdrawal": float(r.withdrawal),
             "investment_return": float(r.investment_return),
             "portfolio_end": float(r.portfolio_end),
+            "portfolio_end_real": float(_real_value(r.portfolio_end, r.calendar_year, base_year, inflation_rate)),
             "life_events": r.life_events,
         }
         for r in rows
@@ -121,7 +145,11 @@ def render_result(result: ProjectionResult, life_expectancy: int = 100) -> Panel
     )
 
 
-def result_to_dict(result: ProjectionResult) -> dict[str, object]:
+def result_to_dict(
+    result: ProjectionResult,
+    inflation_rate: Decimal = Decimal("0"),
+    base_year: int = 0,
+) -> dict[str, object]:
     d: dict[str, object] = {
         "owner": result.owner,
         "retirement_date": result.retirement_date.isoformat(),
@@ -137,8 +165,8 @@ def result_to_dict(result: ProjectionResult) -> dict[str, object]:
         "years_to_depletion": result.years_to_depletion,
         "depletion_age": result.depletion_age,
         "sustainable": result.years_to_depletion is None,
-        "accumulation": detail_rows_to_list(result.accumulation_rows),
-        "detail": detail_rows_to_list(result.detail_rows),
+        "accumulation": detail_rows_to_list(result.accumulation_rows, inflation_rate, base_year),
+        "detail": detail_rows_to_list(result.detail_rows, inflation_rate, base_year),
         "monte_carlo": None,
     }
     if result.monte_carlo_result is not None:
@@ -321,6 +349,7 @@ def main(
     )
 
     reference_date = date.fromisoformat(as_of_date) if as_of_date else None
+    base_year = reference_date.year if reference_date else date.today().year
     data = parse_ledger(ledger_file, spending_years=spending_years, today=reference_date)
     owners = data["owners"]
     accounts = data["accounts"]
@@ -374,7 +403,7 @@ def main(
                 "mode": "per_owner",
                 "config": config_dict,
                 "spending_baseline": spending_dict,
-                "projections": [result_to_dict(per_owner_result)],
+                "projections": [result_to_dict(per_owner_result, config.inflation_rate, base_year)],
             }, indent=2))
         else:
             console.print()
@@ -385,11 +414,15 @@ def main(
                     console.print(render_detail_table(
                         per_owner_result.accumulation_rows,
                         title=f"{owner.title()} — Accumulation (today → retirement)",
+                        inflation_rate=config.inflation_rate,
+                        base_year=base_year,
                     ))
                 console.print()
                 console.print(render_detail_table(
                     per_owner_result.detail_rows,
                     title=f"{owner.title()} — Drawdown (retirement → age {config.life_expectancy})",
+                    inflation_rate=config.inflation_rate,
+                    base_year=base_year,
                 ))
             console.print()
     else:
@@ -413,8 +446,8 @@ def main(
                 "spending_baseline": spending_dict,
                 "household": {
                     **household_result_to_dict(household, all_owners),
-                    "accumulation": detail_rows_to_list(household.accumulation_rows),
-                    "detail": detail_rows_to_list(household.detail_rows),
+                    "accumulation": detail_rows_to_list(household.accumulation_rows, config.inflation_rate, base_year),
+                    "detail": detail_rows_to_list(household.detail_rows, config.inflation_rate, base_year),
                 },
             }, indent=2))
         else:
@@ -426,10 +459,14 @@ def main(
                     console.print(render_detail_table(
                         household.accumulation_rows,
                         title="Household — Accumulation (today → first retirement)",
+                        inflation_rate=config.inflation_rate,
+                        base_year=base_year,
                     ))
                 console.print()
                 console.print(render_detail_table(
                     household.detail_rows,
                     title=f"Household — Drawdown (first retirement → youngest age {config.life_expectancy})",
+                    inflation_rate=config.inflation_rate,
+                    base_year=base_year,
                 ))
             console.print()
